@@ -2,7 +2,6 @@
 
 
 def greet(name):
-    unused = 42
     # TODO: greet in other languages too
     return "Hello, " + name + "!"
 

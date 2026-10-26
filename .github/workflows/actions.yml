@@ -161,7 +161,7 @@ jobs:
         run: |
           sarif="${RUNNER_TEMP}/reports/sonarqube.sarif"
           [[ "${SONAR_SARIF_FILE}" == "${sarif}" ]]
-          for rule in python:S1481 python:S1764; do
+          for rule in python:S1135 python:S1764; do
             jq -e --arg rule "${rule}" 'any(.runs[0].results[]; .ruleId == $rule
               and .locations[0].physicalLocation.artifactLocation.uri == "tests/fixtures/project/src/greeting.py")' "${sarif}"
           done
