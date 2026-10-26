@@ -86,7 +86,6 @@ fi
 # The server: host_url, else SONAR_HOST_URL, else the report's serverUrl,
 # which is the server's own idea of its URL and not always one this job can
 # reach.
-# shellcheck disable=SC2034 # read by sq_host_url
 declare -A SQ_PROPS=([sonar.host.url]="${SERVER}")
 sq_host_url "${HOST_URL}"
 if [[ "${SQ_HOST_URL}" != https://* ]] && ! sq_loopback "${SQ_HOST_URL}"; then
@@ -198,11 +197,23 @@ if [[ "${TOTAL}" -ge 10000 ]]; then
     fi
 fi
 
-# Paths in SonarQube are relative to the project's base directory, this
-# one; SARIF's are relative to the repository's root.
+# Paths in SonarQube are relative to the project's base directory: this
+# one, or the sonar.projectBaseDir of its properties file (the one setup
+# named as project.settings, or sonar-project.properties). SARIF's are
+# relative to the repository's root.
+BASE_DIR="."
+PROPERTIES_FILE=$(sed -n 's/^project\.settings=//p' <<< "${SONARQUBE_ORB_PROPERTIES:-}" | head -n 1)
+PROPERTIES_FILE=${PROPERTIES_FILE:-sonar-project.properties}
+if [[ -f "${PROPERTIES_FILE}" ]]; then
+    SQ_PROPS=()
+    sq_properties_read "${PROPERTIES_FILE}"
+    if [[ -n "${SQ_PROPS[sonar.projectBaseDir]:-}" && -d "${SQ_PROPS[sonar.projectBaseDir]}" ]]; then
+        BASE_DIR=${SQ_PROPS[sonar.projectBaseDir]}
+    fi
+fi
 PREFIX=""
-if command -v git > /dev/null 2>&1 && git rev-parse --is-inside-work-tree > /dev/null 2>&1; then
-    PREFIX=$(git rev-parse --show-prefix)
+if command -v git > /dev/null 2>&1 && git -C "${BASE_DIR}" rev-parse --is-inside-work-tree > /dev/null 2>&1; then
+    PREFIX=$(git -C "${BASE_DIR}" rev-parse --show-prefix)
 fi
 
 mkdir -p "${OUTPUT_DIR}"
@@ -246,7 +257,9 @@ jq -n --slurpfile issues "${WORK}/issues.jsonl" --slurpfile rules "${WORK}/rules
                     name: $id,
                     shortDescription: {text: ($names[$id].name // $id)},
                     helpUri: ($server + "/coding_rules?open=" + ($id | @uri) + "&rule_key=" + ($id | @uri)),
-                    properties: ({tags: ([.[] | .tags // [] | .[]] | unique)}
+                    # GitHub reads security-severity only from a rule tagged
+                    # security.
+                    properties: ({tags: ([.[] | .tags // [] | .[]] + (if any(.[]; security) then ["security"] else [] end) | unique)}
                         + (if any(.[]; security) then
                             {"security-severity": ([.[] | severities[] | score(.)] | max_by(tonumber))}
                         else {} end))
@@ -258,7 +271,7 @@ jq -n --slurpfile issues "${WORK}/issues.jsonl" --slurpfile rules "${WORK}/rules
                 level: issue_level,
                 message: {text: .message},
                 locations: [{physicalLocation: ({
-                    artifactLocation: {uri: ($prefix + path)}
+                    artifactLocation: {uri: ($prefix + path | split("/") | map(@uri) | join("/"))}
                 } + (if .textRange then {region: {
                     startLine: .textRange.startLine,
                     endLine: .textRange.endLine,

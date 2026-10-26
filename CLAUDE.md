@@ -66,7 +66,7 @@ The table covers 7.0.0 to 8.2.0.
 
 ### Command scripts (`src/scripts/`)
 
-- **`setup.sh`** reads the properties file with `sq_properties_read`, an awk reader with `java.util.Properties` semantics: comments, `=`, `:` or white space after the key, continued lines and escapes. It fails on:
+- **`setup.sh`** reads the properties file with `sq_properties_read`, an awk reader with `java.util.Properties` semantics: comments, `=`, `:` or white space after the key, continued lines and escapes. Like the scanner, it then resolves `${env.NAME}` and `${KEY}` placeholders (`sq_resolve`). A value with a placeholder it can't resolve isn't checked; that is left to the scanner. It fails on:
   - a missing file (unless `require_properties_file` is false and `project_key` is set);
   - a missing or invalid project key;
   - a `sonar.sources` or `sonar.tests` path that doesn't exist (relative to `sonar.projectBaseDir`).
@@ -83,8 +83,8 @@ The table covers 7.0.0 to 8.2.0.
 
   `branch_analysis auto` sends branch and pull request properties:
   - always to SonarQube Cloud (by host);
-  - to a server whose `api/navigation/global` `edition` isn't `community`. That endpoint needs the token on SonarQube Server.
-  - Without an edition, `api/server/version` (no token needed) separates Community Build (major 24 to 99) from SonarQube Server (2025.x and on, or 10.x and before), as the scanner itself does.
+  - to a server whose `api/navigation/global` `edition` isn't `community`. That endpoint needs the token on SonarQube Server, so an http:// server (other than loopback) is never asked it.
+  - Without an edition, `api/server/version` separates Community Build (major 24 to 99) from SonarQube Server (2025.x and on, or 10.x and before), as the scanner itself does. It needs no token, so it is asked without one, over http too. `sq_api` allows http when it sends no token.
   - An unknown edition gets them, with a warning.
 
   The properties file is never changed.
@@ -108,13 +108,14 @@ The table covers 7.0.0 to 8.2.0.
   jq turns the issues into one SARIF run:
   - **Level** is the highest of the issue's `impacts` severities, else its legacy `severity`. Both are always returned, whatever the server's mode.
   - **Region:** `textRange` lines are 1-based and offsets 0-based, so `startColumn = startOffset + 1`.
-  - **Paths:** URIs are prefixed with `git rev-parse --show-prefix`.
+  - **Paths:** URIs are prefixed with `git rev-parse --show-prefix` of the project's base directory: the `sonar.projectBaseDir` of its properties file (setup's `project.settings`, or `sonar-project.properties`), else `working_dir`. Each path segment is percent-encoded.
   - **Fingerprint:** GitHub matches alerts only by `partialFingerprints.primaryLocationLineHash`, and doesn't compute it for API uploads. It is `<rule>:<issue hash or key>:<n>`, so it is stable between analyses and between a branch and its pull requests.
-  - **`security-severity`** is a string, set on rules with security issues.
+  - **`security-severity`** is a string, set on rules with security issues. Those rules also get the `security` tag, without which GitHub ignores it.
   - **`automationDetails.id`** is `<category>/<project>/`.
   - **Left out:** issues with no file. GitHub needs a location.
 - **`upload_sarif.sh`** gzips and base64-encodes the file (10 MB gzipped at most), and posts `{commit_sha, ref, sarif, tool_name}` to `POST /repos/{owner}/{repo}/code-scanning/sarifs`. It then polls `GET .../sarifs/{id}` for `processing_status`.
   - **Defaults:** the commit and ref come from GitHub Actions (`GITHUB_SHA`, `GITHUB_REF`) or CircleCI (`CIRCLE_SHA1`, and `refs/pull/<n>/head`, `refs/heads/<branch>` or `refs/tags/<tag>`).
+  - **`pull_request_target`:** on that event `GITHUB_REF` and `GITHUB_SHA` are the base branch's, so a pull request's results go to `refs/pull/<n>/head` and `.pull_request.head.sha` from the event file instead. Otherwise the partial results would replace the base branch's alerts.
   - **403 and 404** explain what code scanning needs: public repositories on github.com, or GitHub Code Security / Advanced Security for private ones and GHES.
   - **The API's base** is `api_url`, then `GITHUB_API_URL`, then `https://api.github.com`. For GHES it is `https://HOST/api/v3`.
 
@@ -142,6 +143,7 @@ Every command has a composite action of the same name in `actions/<command>/acti
 - **Artifacts.** `export_sarif` names its artifact `sonarqube-reports-<report_name>-<random>`, and uploads it with `actions/upload-artifact` under `if: always()` and `store_artifacts`.
 - **Caching.** `install` restores and saves `actions/cache` with the command's key.
 - **`when`** has no effect on GitHub Actions; users give the step `if: always()`.
+- **A failed step exports nothing.** `run_script.sh` passes on nothing from a script that fails, so after a failed quality gate `export_sarif` falls back to `.scannerwork/report-task.txt` in its `working_dir`.
 - **Pins.** Every `uses:` is pinned to a commit SHA, with its version in a comment.
 
 `actions/run_script.sh` and `tests/actions_test.sh` are identical in every juburr orb that ships actions; never edit them here alone. Keep the actions in sync with the command YAML by hand or with an equivalent generator, and quote any default a YAML 1.1 reader would take for a boolean or number. `tests/actions_test.sh` checks all of this.
@@ -164,7 +166,7 @@ Every command has a composite action of the same name in `actions/<command>/acti
   Publishing runs on `v*` tags.
 - **`.github/workflows/actions.yml`** runs the actions:
   - `offline-tests`;
-  - `install` on amd64 and arm64;
+  - `install` on amd64 and arm64, then `install-from-cache` with the download hosts blocked in `/etc/hosts`;
   - `scan`: the same matrix, with SonarQube as a service container, and the SARIF file checked against the OASIS schema (pinned by SHA-256);
   - `upload-sarif`: only on `workflow_dispatch`, so the tests leave no code scanning alerts behind.
 - **`tests/sonarqube_server.sh`** prepares a fresh server:

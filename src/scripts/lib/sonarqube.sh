@@ -181,6 +181,9 @@ sq_words() {
 # number of backslashes continues on the next one, a backslash escapes the
 # character after it, and a later definition of a key replaces an earlier
 # one. \t, \n, \r and \f become a space; \uXXXX escapes are kept as written.
+# Then, as the scanner does, ${env.NAME} in a value becomes the environment
+# variable NAME, and ${KEY} the property KEY; a placeholder that can't be
+# resolved is left as it is.
 sq_properties_read() {
     local key value
     SQ_PROPS=()
@@ -236,6 +239,41 @@ sq_properties_read() {
         }
         END { if (continued) { parse(logical) } }
     ' "$1")
+    # Twice, so a property can name one resolved on the first round.
+    for _ in 1 2; do
+        for key in "${!SQ_PROPS[@]}"; do
+            if [[ "${SQ_PROPS[${key}]}" == *\$\{* ]]; then
+                SQ_PROPS["${key}"]=$(sq_resolve "${SQ_PROPS[${key}]}")
+            fi
+        done
+    done
+}
+
+# sq_resolve VALUE: prints VALUE with its ${env.NAME} placeholders replaced
+# by the environment variable NAME, and its ${KEY} placeholders by the
+# property KEY in SQ_PROPS (when that one has none left itself). A
+# placeholder that can't be resolved stays as it is.
+sq_resolve() {
+    local rest=$1 out="" name var count=0
+    while [[ "${rest}" == *\$\{*\}* && "${count}" -lt 100 ]]; do
+        count=$((count + 1))
+        out+=${rest%%\$\{*}
+        rest=${rest#*\$\{}
+        name=${rest%%\}*}
+        rest=${rest#*\}}
+        if [[ "${name}" == env.* ]] && sq_match "${name#env.}" '^[A-Za-z_][A-Za-z0-9_]*$'; then
+            var=${name#env.}
+            if [[ -n "${!var+set}" ]]; then
+                out+=${!var}
+                continue
+            fi
+        elif [[ -n "${name}" && -n "${SQ_PROPS[${name}]+set}" && "${SQ_PROPS[${name}]}" != *\$\{* ]]; then
+            out+=${SQ_PROPS[${name}]}
+            continue
+        fi
+        out+="\${${name}}"
+    done
+    printf '%s\n' "${out}${rest}"
 }
 
 # sq_secret_key KEY: succeeds when the property KEY holds a credential, whose
@@ -272,6 +310,10 @@ sq_host_url() {
     if [[ -z "${SQ_HOST_URL}" && -n "${SQ_PROPS[sonar.host.url]+set}" ]]; then
         SQ_HOST_URL=${SQ_PROPS[sonar.host.url]}
         SQ_HOST_FROM="sonar.host.url"
+        if [[ "${SQ_HOST_URL}" == *\$\{* ]]; then
+            echo "WARN: sonar.host.url holds a placeholder this step can't resolve (${SQ_HOST_URL}), so it doesn't know the server." >&2
+            SQ_HOST_URL=""
+        fi
     fi
     if [[ -z "${SQ_HOST_URL}" ]]; then
         SQ_HOST_FROM=""
@@ -340,8 +382,8 @@ sq_auth_header() {
 
 # sq_api URL OUT [CURL_ARG...]: calls the SonarQube Web API at URL with the
 # token in SQ_AUTH_FILE (when set), writes the body to OUT and prints the
-# HTTP status. The token only goes over https, or to this machine. Returns 1
-# when curl could not get an answer at all.
+# HTTP status. A call with the token only goes over https, or to this
+# machine. Returns 1 when curl could not get an answer at all.
 sq_api() {
     local url=$1 out=$2 code rc=0 proto="=https"
     local -a auth=() extra=()
@@ -350,7 +392,7 @@ sq_api() {
     if [[ $# -gt 0 ]]; then
         extra=("$@")
     fi
-    if sq_loopback "${url}"; then
+    if sq_loopback "${url}" || [[ -z "${SQ_AUTH_FILE:-}" ]]; then
         proto="=http,https"
     fi
     if [[ -n "${SQ_AUTH_FILE:-}" ]]; then
@@ -371,11 +413,12 @@ sq_api() {
 # request from CircleCI's or GitHub Actions' environment, into SQ_CI
 # (CircleCI, GitHub Actions or empty), SQ_CI_SHA, SQ_CI_REPOSITORY
 # (owner/name), SQ_CI_BRANCH, SQ_CI_TAG, and for a pull request SQ_CI_PR_KEY,
-# SQ_CI_PR_BRANCH and SQ_CI_PR_BASE (empty when the service doesn't say).
+# SQ_CI_PR_BRANCH, SQ_CI_PR_BASE and SQ_CI_PR_HEAD_SHA (empty when the
+# service doesn't say).
 sq_ci_context() {
     local number
     SQ_CI="" SQ_CI_SHA="" SQ_CI_REPOSITORY="" SQ_CI_BRANCH="" SQ_CI_TAG=""
-    SQ_CI_PR_KEY="" SQ_CI_PR_BRANCH="" SQ_CI_PR_BASE=""
+    SQ_CI_PR_KEY="" SQ_CI_PR_BRANCH="" SQ_CI_PR_BASE="" SQ_CI_PR_HEAD_SHA=""
     if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
         SQ_CI="GitHub Actions"
         SQ_CI_SHA=${GITHUB_SHA:-}
@@ -391,6 +434,9 @@ sq_ci_context() {
                 SQ_CI_PR_KEY=${number}
                 SQ_CI_PR_BRANCH=${GITHUB_HEAD_REF:-}
                 SQ_CI_PR_BASE=${GITHUB_BASE_REF:-}
+                if [[ -n "${GITHUB_EVENT_PATH:-}" && -f "${GITHUB_EVENT_PATH}" ]] && command -v jq > /dev/null 2>&1; then
+                    SQ_CI_PR_HEAD_SHA=$(jq -r '.pull_request.head.sha // empty' "${GITHUB_EVENT_PATH}" 2> /dev/null || true)
+                fi
                 ;;
             *)
                 if [[ "${GITHUB_REF_TYPE:-}" == "tag" || "${GITHUB_REF:-}" == refs/tags/* ]]; then

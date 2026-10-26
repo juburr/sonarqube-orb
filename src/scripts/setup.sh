@@ -91,6 +91,8 @@ if [[ -z "${PROJECT_KEY}" ]]; then
     elif [[ "${REQUIRE_PROPERTIES_FILE}" == "false" ]]; then
         error "Without ${PROPERTIES_FILE}, set project_key: every analysis needs one."
     fi
+elif [[ "${PROJECT_KEY}" == *\$\{* ]]; then
+    warn "The project key '${PROJECT_KEY}' (${KEY_FROM}) holds a placeholder this step can't resolve, so it can't check it."
 elif ! sq_match "${PROJECT_KEY}" '^[A-Za-z0-9_.:-]+$' || sq_match "${PROJECT_KEY}" '^[0-9]+$' || [[ "${#PROJECT_KEY}" -gt 400 ]]; then
     error "The project key '${PROJECT_KEY}' (${KEY_FROM}) is not one SonarQube accepts:" \
         "up to 400 letters, digits, '-', '_', '.' and ':', with at least one that isn't a digit."
@@ -107,7 +109,7 @@ done
 # The directories sonar.sources and sonar.tests name, relative to the
 # project's base directory.
 BASE_DIR="."
-if [[ -n "${SQ_PROPS[sonar.projectBaseDir]:-}" ]]; then
+if [[ -n "${SQ_PROPS[sonar.projectBaseDir]:-}" && "${SQ_PROPS[sonar.projectBaseDir]}" != *\$\{* ]]; then
     BASE_DIR=${SQ_PROPS[sonar.projectBaseDir]}
     if [[ ! -d "${BASE_DIR}" ]]; then
         error "sonar.projectBaseDir in ${PROPERTIES_FILE} names ${BASE_DIR}, which is not a directory here."
@@ -122,7 +124,8 @@ for key in sonar.sources sonar.tests; do
     for path in ${paths[@]+"${paths[@]}"}; do
         path="${path#"${path%%[![:space:]]*}"}"
         path="${path%"${path##*[![:space:]]}"}"
-        if [[ -z "${path}" ]]; then
+        # A placeholder this step couldn't resolve is the scanner's to check.
+        if [[ -z "${path}" || "${path}" == *\$\{* ]]; then
             continue
         fi
         if [[ "${path}" == /* ]]; then
@@ -211,25 +214,28 @@ else
     EDITION=""
     if [[ -z "${SQ_HOST_URL}" ]]; then
         :
-    elif [[ "${SQ_HOST_URL}" != https://* ]] && ! sq_loopback "${SQ_HOST_URL}"; then
-        warn "The server URL is http://, and this orb only sends the token over https, so it can't ask the server" \
-            "which edition it is. Set branch_analysis to true or false."
     else
         sq_curl_init
         WORK=$(mktemp -d)
         trap 'rm -rf "${WORK}"' EXIT
+        # The token only goes over https, or to this machine.
         SQ_AUTH_FILE=""
-        if [[ -n "${SQ_TOKEN}" ]]; then
+        SECURE=false
+        if [[ "${SQ_HOST_URL}" == https://* ]] || sq_loopback "${SQ_HOST_URL}"; then
+            SECURE=true
+        fi
+        if [[ -n "${SQ_TOKEN}" && "${SECURE}" == "true" ]]; then
             SQ_AUTH_FILE="${WORK}/auth"
             sq_auth_header "${SQ_AUTH_FILE}" Authorization "Bearer ${SQ_TOKEN}"
         fi
         # api/navigation/global names the edition, but needs the token on
-        # SonarQube Server. Without it, the version still tells Community
-        # Build (24.x to 26.x and on) from SonarQube Server (2025.x and on,
-        # or 10.x and before, which can't be told apart), as the scanner
-        # itself does.
+        # SonarQube Server. Without it, the version, which needs no token,
+        # still tells Community Build (24.x to 26.x and on) from SonarQube
+        # Server (2025.x and on, or 10.x and before, which can't be told
+        # apart), as the scanner itself does.
         CODE=""
-        if CODE=$(sq_api "${SQ_HOST_URL}/api/navigation/global" "${WORK}/global.json") && [[ "${CODE}" == 200 ]]; then
+        if [[ "${SECURE}" == "true" ]] && CODE=$(sq_api "${SQ_HOST_URL}/api/navigation/global" "${WORK}/global.json") \
+            && [[ "${CODE}" == 200 ]]; then
             EDITION=$(sed -n 's/.*"edition" *: *"\([A-Za-z]*\)".*/\1/p' "${WORK}/global.json" | head -n 1)
         fi
         if [[ -z "${EDITION}" ]] && VERSION_CODE=$(SQ_AUTH_FILE="" sq_api "${SQ_HOST_URL}/api/server/version" "${WORK}/version.txt") \
@@ -239,7 +245,11 @@ else
                 EDITION=community
             fi
         fi
-        if [[ -z "${EDITION}" ]]; then
+        if [[ -z "${EDITION}" && "${SECURE}" == "false" ]]; then
+            warn "The server URL is http://, and this orb only sends the token over https, so it asked the server" \
+                "only for its version, which didn't tell its edition. Set branch_analysis to true or false."
+        fi
+        if [[ -z "${EDITION}" && "${SECURE}" == "true" ]]; then
             warn "Could not tell which edition ${SQ_HOST_URL} is (api/navigation/global answered HTTP ${CODE:-nothing}${SQ_TOKEN:+, with the token in ${SQ_TOKEN_VAR}})."
         fi
     fi

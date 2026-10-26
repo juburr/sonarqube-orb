@@ -290,6 +290,24 @@ check "unescapes keys" said "  key=with:escapes=value"
 check "lets a later definition win" said "SonarQube analysis of demo2"
 check "skips comments" not_said "comment"
 
+begin "placeholders"
+new_case
+mkdir -p "${CASE}/repo/app/lib"
+cat > "${CASE}/repo/app/sonar-project.properties" << 'EOF'
+sonar.projectKey=${env.PROJECT}
+sonar.sources=${env.SOURCES},lib
+sonar.tests=${sonar.sources}
+sonar.host.url=${env.SONAR_URL}
+EOF
+run setup PROJECT=demo-env SOURCES=src
+check "resolves \${env.NAME} as the scanner does" said "SonarQube analysis of demo-env"
+check "and \${KEY}" said "  sonar.tests=src,lib"
+check "checking the resolved paths" succeeded
+run setup SOURCES=src
+check "a placeholder it can't resolve is left to the scanner" succeeded
+check "with a warning that the key can't be checked" said "holds a placeholder this step can't resolve"
+check "the server's too" said "sonar.host.url holds a placeholder"
+
 begin "credentials and paths"
 new_case
 printf 'sonar.projectKey=demo\nsonar.sources=src\nsonar.login=squ_s3cr3t\nsonar.token=squ_t0k3n\n' > "${CASE}/repo/app/sonar-project.properties"
@@ -399,8 +417,15 @@ check "SonarQube Cloud gets them without asking" exported SONARQUBE_ORB_PROPERTI
 check "the server isn't asked" no_requests
 check "and it is reminded of sonar.organization" said "SonarQube Cloud needs the organization's key"
 new_case
-run setup host_url=http://sonar.internal.example "${CIRCLE_PR[@]}" SONAR_TOKEN=squ_abc
-check "an http:// server isn't sent the token" said "this orb only sends the token over https"
+routes '[{"path": "/api/navigation/global", "responses": [{"json": {"edition": "developer"}}]}, {"path": "/api/server/version", "responses": [{"text": "26.10.0.133078"}]}]'
+run setup "host_url=${SERVER/127.0.0.1/0.0.0.0}" "${CIRCLE_PR[@]}" SONAR_TOKEN=squ_abc
+check "an http:// server is asked only for its version" requested '.path == "/api/server/version" and .authorization == null'
+check "never with the token" not_requested '.authorization != null'
+check "which tells Community Build" exported SONARQUBE_ORB_PROPERTIES ""
+routes '[{"path": "/api/server/version", "responses": [{"text": "2026.1.0.118200"}]}]'
+run setup "host_url=${SERVER/127.0.0.1/0.0.0.0}" "${CIRCLE_PR[@]}" SONAR_TOKEN=squ_abc
+check "a SonarQube Server version over http:// gets the properties" exported SONARQUBE_ORB_PROPERTIES $'sonar.pullrequest.key=42\nsonar.pullrequest.branch=feature/login'
+check "saying why it couldn't ask for the edition" said "this orb only sends the token over https"
 new_case
 run setup "host_url=${SERVER}" branch_analysis=false "${CIRCLE_PR[@]}"
 check "branch_analysis false sends none" exported SONARQUBE_ORB_PROPERTIES ""
@@ -565,6 +590,7 @@ check "or its key, without one" json_is "${SARIF}" '.runs[0].tool.driver.rules[]
 check "links each rule" json_is "${SARIF}" '.runs[0].tool.driver.rules[] | select(.id == "python:S1481") | .helpUri' "${SERVER}/coding_rules?open=python%3AS1481&rule_key=python%3AS1481"
 check "a high security impact is an error" json_is "${SARIF}" '.runs[0].results[] | select(.ruleId == "python:S2068") | .level' "error"
 check "with a security-severity" json_is "${SARIF}" '.runs[0].tool.driver.rules[] | select(.id == "python:S2068") | .properties["security-severity"]' "8.0"
+check "and the security tag GitHub reads it with" json_is "${SARIF}" '.runs[0].tool.driver.rules[] | select(.id == "python:S2068") | .properties.tags | index("security") != null' "true"
 check "other rules have none" json_is "${SARIF}" '[.runs[0].tool.driver.rules[] | select(.properties | has("security-severity"))] | length' "1"
 check "a low impact is a note" json_is "${SARIF}" '.runs[0].results[] | select(.ruleId == "python:S1481") | .level' "note"
 check "a major issue without impacts is a warning" json_is "${SARIF}" '.runs[0].results[] | select(.ruleId == "python:S1192") | .level' "warning"
@@ -577,6 +603,17 @@ check "with the category and project" json_is "${SARIF}" '.runs[0].automationDet
 check "leaves out the issue that is in no file" said "leaving out 1 that are not in a file"
 check "exports the file's path" exported SONAR_SARIF_FILE "${SARIF}"
 check "never printing the token" not_said "squ_abc"
+
+begin "paths"
+new_case
+report_task demo
+mkdir -p "${CASE}/repo/app/sub"
+printf 'sonar.projectKey=demo\nsonar.projectBaseDir=sub\n' > "${CASE}/repo/app/sonar-project.properties"
+routes "[$(task_route "${TASK_DONE}"),
+    {\"path\": \"/api/issues/search\", \"responses\": [{\"json\": {\"paging\": {\"total\": 1}, \"issues\": [{\"key\": \"A\", \"rule\": \"r:1\", \"component\": \"demo:src/my file#1.py\", \"message\": \"m\", \"severity\": \"MINOR\"}]}}]}]"
+run export_sarif SONAR_TOKEN=squ_abc
+check "paths are relative to sonar.projectBaseDir, and percent-encoded" \
+    json_is "${CASE}/out/sonarqube.sarif" '.runs[0].results[0].locations[0].physicalLocation.artifactLocation.uri' "app/sub/src/my%20file%231.py"
 
 begin "the analyzed branch or pull request"
 new_case
@@ -687,6 +724,15 @@ run upload_sarif "api_url=${SERVER}" GITHUB_TOKEN=ghs_xyz "sarif_file=${SARIF_FI
     commit_sha=fedcba9876543210fedcba9876543210fedcba98 ref=refs/heads/release wait=false
 check "the parameters win" requested '.method == "POST" and (.body | fromjson | .commit_sha == "fedcba9876543210fedcba9876543210fedcba98" and .ref == "refs/heads/release")'
 check "wait false doesn't wait" not_requested '.method == "GET"'
+
+new_case
+routes "${UPLOAD_OK}"
+printf '{"pull_request": {"number": 15, "head": {"sha": "aaaabbbbccccddddeeeeffff0000111122223333"}}}\n' > "${WORK}/target-event.json"
+run upload_sarif "sarif_file=${SARIF_FIXTURE}" "api_url=${SERVER}" GITHUB_TOKEN=ghs_xyz GITHUB_ACTIONS=true GITHUB_EVENT_NAME=pull_request_target \
+    GITHUB_REF=refs/heads/main GITHUB_SHA=89abcdef0123456789abcdef0123456789abcdef GITHUB_HEAD_REF=fix/typo GITHUB_BASE_REF=main \
+    "GITHUB_EVENT_PATH=${WORK}/target-event.json" GITHUB_REPOSITORY=acme/app
+check "pull_request_target goes to the pull request's head, not the base branch" \
+    requested '.method == "POST" and (.body | fromjson | .ref == "refs/pull/15/head" and .commit_sha == "aaaabbbbccccddddeeeeffff0000111122223333")'
 
 begin "when GitHub refuses"
 new_case

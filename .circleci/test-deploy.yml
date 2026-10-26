@@ -235,7 +235,8 @@ jobs:
           command: |
             : > /tmp/bash_env
             BASH_ENV=/tmp/bash_env bash tests/run_command.sh setup working_dir=tests/fixtures/project branch_analysis=true branch_name=feature/x
-            if bash -c 'source /tmp/bash_env && bash tests/run_command.sh scan working_dir=tests/fixtures/project' > /tmp/run.log 2>&1; then
+            # Every bash sources BASH_ENV as it starts, so the scan gets setup's properties through it.
+            if BASH_ENV=/tmp/bash_env bash tests/run_command.sh scan working_dir=tests/fixtures/project > /tmp/run.log 2>&1; then
               cat /tmp/run.log
               echo "FAIL: Community Build analyzed a branch."
               exit 1

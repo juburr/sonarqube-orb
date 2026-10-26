@@ -12,7 +12,10 @@
 # The commit and ref default to the build's: on GitHub Actions GITHUB_SHA
 # and GITHUB_REF (refs/pull/<n>/merge for a pull request), on CircleCI
 # CIRCLE_SHA1 and refs/heads/<branch>, or refs/pull/<n>/head for a pull
-# request. It then waits for GitHub to process the upload, and fails when
+# request. A pull_request_target event runs on the base branch, so its
+# GITHUB_REF and GITHUB_SHA are the base's: its results go to
+# refs/pull/<n>/head and the pull request's head commit instead, never to
+# the base branch. It then waits for GitHub to process the upload, and fails when
 # GitHub rejects it.
 
 set -euo pipefail
@@ -88,15 +91,19 @@ if ! sq_match "${API_URL}" '^https?://([A-Za-z0-9.-]+|\[[0-9A-Fa-f:.]+\])(:[0-9]
     echo "ERROR: api_url must be an https:// URL, such as https://api.github.com or https://github.example.com/api/v3, not '${API_URL}'." >&2
     exit 1
 fi
+DEFAULT_COMMIT=${SQ_CI_SHA}
+if [[ -n "${SQ_CI_PR_KEY}" && "${SQ_CI}" == "GitHub Actions" && "${GITHUB_REF:-}" != refs/pull/* ]]; then
+    DEFAULT_COMMIT=${SQ_CI_PR_HEAD_SHA}
+fi
 if [[ -z "${COMMIT}" ]]; then
-    COMMIT=${SQ_CI_SHA}
+    COMMIT=${DEFAULT_COMMIT}
 fi
 if ! sq_match "${COMMIT}" '^[0-9a-f]{40}([0-9a-f]{24})?$'; then
     echo "ERROR: commit_sha must be the full commit SHA${COMMIT:+, not ${COMMIT}}. Set it when CI doesn't say which commit this build is for." >&2
     exit 1
 fi
 if [[ -z "${REF}" ]]; then
-    if [[ "${SQ_CI}" == "GitHub Actions" && "${GITHUB_REF:-}" == refs/* ]]; then
+    if [[ "${SQ_CI}" == "GitHub Actions" && "${GITHUB_REF:-}" == refs/* && ( -z "${SQ_CI_PR_KEY}" || "${GITHUB_REF}" == refs/pull/* ) ]]; then
         REF=${GITHUB_REF}
     elif [[ -n "${SQ_CI_PR_KEY}" ]]; then
         REF="refs/pull/${SQ_CI_PR_KEY}/head"
@@ -144,6 +151,10 @@ explain() {
 }
 case "${CODE}" in
     202) ;;
+    413)
+        echo "ERROR: GitHub refused the upload as too large (HTTP 413): $(explain "${WORK}/upload.json")" >&2
+        exit 1
+        ;;
     403 | 404)
         echo "ERROR: GitHub refused the upload (HTTP ${CODE}): $(explain "${WORK}/upload.json")" >&2
         echo "  Code scanning takes uploads for public repositories on github.com, and for private repositories and" >&2

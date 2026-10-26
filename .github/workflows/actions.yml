@@ -63,8 +63,6 @@ jobs:
           grep -q "SonarScanner CLI ${version}\." /tmp/version.log
           grep -qx "arch=${ARCH}" "${HOME}/.sonarqube-orb/sonar-scanner/.sonarqube-orb"
           [[ -x "${HOME}/.sonarqube-orb/sonar-scanner/jre/bin/java" ]]
-      # The first install saved the release to the cache, so this one
-      # restores it.
       - uses: ./actions/install
         with:
           version: 7.0.0.4796
@@ -83,6 +81,28 @@ jobs:
         run: |
           [[ "${OUTCOME}" == "failure" ]]
           [[ ! -e ~/unlisted ]]
+
+  # With the download hosts blocked, the install must come from the cache
+  # the install job saved.
+  install-from-cache:
+    needs: install
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Block the download hosts
+        run: |
+          echo "127.0.0.1 binaries.sonarsource.com repo1.maven.org" | sudo tee -a /etc/hosts
+          if curl -sS --max-time 10 -o /dev/null https://binaries.sonarsource.com/; then
+            echo "binaries.sonarsource.com is still reachable."
+            exit 1
+          fi
+      - uses: ./actions/install
+      - name: Verify the install came from the cache
+        run: |
+          version=$(grep -A3 '^  version:' src/commands/install.yml | sed -n 's/^    default: "\(.*\)"$/\1/p')
+          sonar-scanner --version | grep -q "SonarScanner CLI ${version}\."
 
   # Every action against SonarQube Community Build, with the oldest and the
   # newest scanner the orb lists, and an older and the newest server.

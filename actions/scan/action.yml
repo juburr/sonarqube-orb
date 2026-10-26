@@ -5,9 +5,11 @@ description: >
   sonar-project.properties, and passes on what setup worked out, if it ran.
   The token reaches the scanner in its environment, never on its command line.
   Afterwards it exports the analysis' dashboard URL and the server's task ID,
-  also when the quality gate fails, for later steps such as export_sarif. Run
-  install first, and setup to analyze branches and pull requests. The GitHub
-  Actions twin of the orb's scan command.
+  also when the quality gate fails, for later steps such as export_sarif (on
+  GitHub Actions, a failed step exports nothing, and export_sarif finds the
+  scanner's report in working_dir instead). Run install first, and setup to
+  analyze branches and pull requests. The GitHub Actions twin of the orb's
+  scan command.
 author: juburr
 
 inputs:

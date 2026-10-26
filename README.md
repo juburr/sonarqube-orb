@@ -385,6 +385,7 @@ What one action exports, later steps see, as with CircleCI's `BASH_ENV`. A few d
 - **Set credentials in the environment** of the job or step: `token` and `github_token` name variables, as on CircleCI.
 - **Give `actions/checkout` `fetch-depth: 0`.** Without the history, SonarQube can't blame lines or tell new code from old, and `setup` warns.
 - **Use `if: always()` in place of `when`.**
+- **A step that fails passes nothing on.** After a failed quality gate, `scan`'s exports don't reach later steps, so `export_sarif` reads the scanner's report from `.scannerwork/report-task.txt` itself: run it in the same `working_dir`.
 - **Grant the job `permissions: security-events: write`** for `upload_sarif`, and pass it `GITHUB_TOKEN: ${{ github.token }}`:
 
 ```yaml
