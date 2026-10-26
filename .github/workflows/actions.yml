@@ -164,10 +164,10 @@ jobs:
         run: |
           sarif="${RUNNER_TEMP}/reports/sonarqube.sarif"
           [[ "${SONAR_SARIF_FILE}" == "${sarif}" ]]
-          for rule in python:S1135 python:S1764; do
-            jq -e --arg rule "${rule}" 'any(.runs[0].results[]; .ruleId == $rule
-              and .locations[0].physicalLocation.artifactLocation.uri == "tests/fixtures/project/src/greeting.py")' "${sarif}"
-          done
+          # Which rules the default profile reports differs between server
+          # releases; every one reports the identical operands of "==".
+          jq -e 'any(.runs[0].results[]; .ruleId == "python:S1764")' "${sarif}"
+          jq -e 'all(.runs[0].results[]; .locations[0].physicalLocation.artifactLocation.uri == "tests/fixtures/project/src/greeting.py")' "${sarif}"
           curl --fail --silent --show-error --location --proto '=https' --output "${RUNNER_TEMP}/sarif-schema-2.1.0.json" \
             https://docs.oasis-open.org/sarif/sarif/v2.1.0/errata01/os/schemas/sarif-schema-2.1.0.json
           echo "c3b4bb2d6093897483348925aaa73af03b3e3f4bd4ca38cef26dcb4212a2682e  ${RUNNER_TEMP}/sarif-schema-2.1.0.json" | sha256sum -c -

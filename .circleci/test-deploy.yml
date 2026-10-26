@@ -212,12 +212,12 @@ jobs:
             [[ "${SONAR_SARIF_FILE}" == "${sarif}" ]]
             jq -e '.version == "2.1.0" and (.runs | length) == 1' "${sarif}"
             jq -e '.runs[0].automationDetails.id == "sonarqube/sonarqube-orb-fixture/"' "${sarif}"
-            for rule in python:S1135 python:S1764; do
-              jq -e --arg rule "${rule}" 'any(.runs[0].results[]; .ruleId == $rule
-                and .locations[0].physicalLocation.artifactLocation.uri == "tests/fixtures/project/src/greeting.py"
-                and .locations[0].physicalLocation.region.startLine >= 1
-                and (.partialFingerprints.primaryLocationLineHash | length) > 0)' "${sarif}"
-            done
+            # Which rules the default profile reports differs between server
+            # releases; every one reports the identical operands of "==".
+            jq -e 'any(.runs[0].results[]; .ruleId == "python:S1764")' "${sarif}"
+            jq -e 'all(.runs[0].results[]; .locations[0].physicalLocation.artifactLocation.uri == "tests/fixtures/project/src/greeting.py"
+              and .locations[0].physicalLocation.region.startLine >= 1
+              and (.partialFingerprints.primaryLocationLineHash | length) > 0)' "${sarif}"
             jq -e 'all(.runs[0].tool.driver.rules[]; (.shortDescription.text | length) > 0)' "${sarif}"
       - run:
           name: Verify A Failing Quality Gate Fails The Scan, And Still Exports The Analysis
