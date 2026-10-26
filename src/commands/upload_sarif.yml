@@ -1,0 +1,85 @@
+description: >
+  Uploads a SARIF file, such as the one export_sarif writes, to GitHub code
+  scanning through GitHub's REST API, so it works from CircleCI as well as
+  GitHub Actions, and with GitHub Enterprise Server. GitHub takes uploads for
+  public repositories on github.com, and for private repositories and GitHub
+  Enterprise Server only with GitHub Code Security (Advanced Security)
+  enabled. It then waits for GitHub to process the file, and fails when
+  GitHub rejects it. Needs jq, gzip and base64.
+parameters:
+  sarif_file:
+    type: string
+    default: ""
+    description: >
+      The SARIF file to upload. Empty (the default) uses the one export_sarif
+      exported (SONAR_SARIF_FILE). Environment variables are expanded.
+  github_token:
+    type: env_var_name
+    default: GITHUB_TOKEN
+    description: >
+      Name of the environment variable that holds a GitHub token allowed to
+      upload code scanning results: the security_events scope for a classic
+      token, Code scanning alerts read and write for a fine-grained one, or
+      security-events: write for a GitHub Actions job's token.
+  repository:
+    type: string
+    default: ""
+    description: >
+      The GitHub repository, as owner/name. Empty (the default) uses the
+      build's: GITHUB_REPOSITORY, or CIRCLE_PROJECT_USERNAME and
+      CIRCLE_PROJECT_REPONAME. Environment variables are expanded.
+  api_url:
+    type: string
+    default: ""
+    description: >
+      GitHub's API, such as https://github.example.com/api/v3 for GitHub
+      Enterprise Server. Empty (the default) uses GITHUB_API_URL, then
+      https://api.github.com. Environment variables are expanded.
+  commit_sha:
+    type: string
+    default: ""
+    description: >
+      The full SHA of the commit the analysis is of. Empty (the default) uses
+      GITHUB_SHA or CIRCLE_SHA1. Environment variables are expanded.
+  ref:
+    type: string
+    default: ""
+    description: >
+      The Git ref the analysis is of: refs/heads/<branch>, refs/tags/<tag>,
+      or refs/pull/<number>/head (or /merge). Empty (the default) uses
+      GITHUB_REF on GitHub Actions, and on CircleCI the pull request
+      (refs/pull/<number>/head), branch or tag the build is for. Environment
+      variables are expanded.
+  wait:
+    type: boolean
+    default: true
+    description: >
+      Wait for GitHub to process the upload, and fail when it can't.
+  wait_timeout:
+    type: string
+    default: "120"
+    description: >
+      With wait, how many seconds to wait.
+  when:
+    type: enum
+    enum: ["on_success", "always", "on_fail"]
+    default: on_success
+    description: >
+      When the step runs: "always" also runs it after an earlier step
+      failed, such as a scan whose quality gate failed. On GitHub Actions,
+      give the step if: always() instead.
+steps:
+  - run:
+      name: Upload SARIF to GitHub code scanning
+      environment:
+        PARAM_API_URL: << parameters.api_url >>
+        PARAM_COMMIT_SHA: << parameters.commit_sha >>
+        PARAM_GITHUB_TOKEN: << parameters.github_token >>
+        PARAM_REF: << parameters.ref >>
+        PARAM_REPOSITORY: << parameters.repository >>
+        PARAM_SARIF_FILE: << parameters.sarif_file >>
+        PARAM_WAIT: << parameters.wait >>
+        PARAM_WAIT_TIMEOUT: << parameters.wait_timeout >>
+        SCRIPT_SONARQUBE_LIB: << include(scripts/lib/sonarqube.sh) >>
+      command: << include(scripts/upload_sarif.sh) >>
+      when: << parameters.when >>
