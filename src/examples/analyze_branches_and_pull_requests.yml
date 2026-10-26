@@ -1,0 +1,28 @@
+description: >
+  Analyze every branch and pull request with SonarQube Server (Developer
+  Edition or above) and fail the job when the quality gate fails. The job
+  runs on cimg/base: the scanner comes with its own Java runtime. setup
+  checks sonar-project.properties and works out from CircleCI whether the
+  build is for a pull request (CIRCLE_PULL_REQUEST) or a branch, and scan
+  passes that to the scanner. SONAR_HOST_URL and SONAR_TOKEN come from a
+  context.
+
+usage:
+  version: 2.1
+  orbs:
+    sonarqube: juburr/sonarqube-orb@0.1.0
+  jobs:
+    sonarqube:
+      docker:
+        - image: cimg/base:current
+      steps:
+        - checkout
+        - sonarqube/install
+        - sonarqube/setup
+        - sonarqube/scan:
+            quality_gate_wait: true
+  workflows:
+    analyze:
+      jobs:
+        - sonarqube:
+            context: sonarqube

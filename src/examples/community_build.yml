@@ -1,0 +1,28 @@
+description: >
+  SonarQube Community Build analyzes one branch, the project's main one, and
+  refuses branch and pull request properties. Scan the main branch only.
+  setup's default, branch_analysis auto, asks the server which edition it
+  is and leaves those properties out for Community Build.
+
+usage:
+  version: 2.1
+  orbs:
+    sonarqube: juburr/sonarqube-orb@0.1.0
+  jobs:
+    sonarqube:
+      docker:
+        - image: cimg/base:current
+      steps:
+        - checkout
+        - sonarqube/install
+        - sonarqube/setup
+        - sonarqube/scan:
+            quality_gate_wait: true
+  workflows:
+    analyze:
+      jobs:
+        - sonarqube:
+            context: sonarqube
+            filters:
+              branches:
+                only: main

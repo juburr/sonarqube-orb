@@ -1,0 +1,34 @@
+description: >
+  Show SonarQube's issues in GitHub code scanning, beside the pull request's
+  changes. export_sarif reads the analysis' unresolved issues from SonarQube
+  and writes them as SARIF, which upload_sarif sends to GitHub's code
+  scanning API. Both run even when the quality gate fails the scan. GitHub
+  takes the upload for a public repository, and for a private one or GitHub
+  Enterprise Server with GitHub Code Security (Advanced Security) enabled.
+  GITHUB_TOKEN, in the github-code-scanning context, needs the
+  security_events scope; SONAR_TOKEN must be a user token, which can read
+  issues.
+
+usage:
+  version: 2.1
+  orbs:
+    sonarqube: juburr/sonarqube-orb@0.1.0
+  jobs:
+    sonarqube:
+      docker:
+        - image: cimg/base:current
+      steps:
+        - checkout
+        - sonarqube/install
+        - sonarqube/setup
+        - sonarqube/scan:
+            quality_gate_wait: true
+        - sonarqube/export_sarif:
+            when: always
+        - sonarqube/upload_sarif:
+            when: always
+  workflows:
+    analyze:
+      jobs:
+        - sonarqube:
+            context: [sonarqube, github-code-scanning]

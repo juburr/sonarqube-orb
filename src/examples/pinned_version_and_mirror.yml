@@ -1,0 +1,33 @@
+description: >
+  Pin the scanner to the release your server's documentation lists, and
+  download it from an internal mirror, such as an Artifactory remote
+  repository of Maven Central: the orb's checksum table still decides what
+  is installed. skip_jre_provisioning runs the analysis on the scanner's own
+  Java runtime instead of one downloaded from the server. A project that
+  isn't at the repository's root runs from its directory.
+
+usage:
+  version: 2.1
+  orbs:
+    sonarqube: juburr/sonarqube-orb@0.1.0
+  jobs:
+    sonarqube:
+      docker:
+        - image: cimg/base:current
+      steps:
+        - checkout
+        - sonarqube/install:
+            version: 7.2.0
+            download_base_url: https://artifactory.example.com/artifactory/maven-central
+        - sonarqube/setup:
+            working_dir: services/api
+        - sonarqube/scan:
+            working_dir: services/api
+            skip_jre_provisioning: true
+            java_opts: -Xmx2g
+            verbose: true
+  workflows:
+    analyze:
+      jobs:
+        - sonarqube:
+            context: sonarqube
