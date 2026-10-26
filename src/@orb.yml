@@ -1,0 +1,10 @@
+version: 2.1
+
+description: >
+  Simplifies installation and use of the SonarScanner CLI within CircleCI: analyze code with SonarQube Server,
+  SonarQube Community Build or SonarQube Cloud, set up branch and pull request analysis, and send SonarQube's
+  issues to GitHub code scanning as SARIF.
+
+display:
+  home_url: "https://github.com/juburr/sonarqube-orb"
+  source_url: "https://github.com/juburr/sonarqube-orb"
