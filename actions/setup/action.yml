@@ -1,0 +1,106 @@
+name: Set up a SonarQube analysis
+description: >
+  Prepares a SonarQube analysis: checks the project's sonar-project.properties
+  (that it exists, has a valid sonar.projectKey, holds no credentials, and
+  that the sonar.sources and sonar.tests it names exist) and the checkout (not
+  shallow), and works out from CircleCI's or GitHub Actions' environment
+  whether this build analyzes a branch or a pull request. It prints the file's
+  settings with credentials hidden and exports the branch or pull request
+  properties for scan, which passes them to the scanner with -D: the
+  properties file is never changed. Branch and pull request analysis need
+  SonarQube Server Developer Edition or above, or SonarQube Cloud; with
+  branch_analysis auto, setup asks the server and leaves them out for
+  Community Build. The GitHub Actions twin of the orb's setup command.
+author: juburr
+
+inputs:
+  branch_analysis:
+    description: >
+      Whether the analysis names this build's branch (sonar.branch.name) or
+      pull request (sonar.pullrequest.key, .branch and .base). "true" always
+      does, which Community Build refuses. "false" never does, but SonarQube
+      Server Developer Edition and above can still detect a branch or pull
+      request on its own on some CI services, such as GitHub Actions. "auto"
+      (the default) does for SonarQube Cloud and for SonarQube Server
+      Developer Edition and above, and not for Community Build, asking the
+      server which edition it is.
+    default: auto
+  branch_name:
+    description: >
+      The branch to analyze as (sonar.branch.name), in place of the one
+      CircleCI or GitHub Actions names. Setting it analyzes a branch, never a
+      pull request.
+    default: ""
+  host_url:
+    description: >
+      The server's URL, such as https://sonarqube.example.com, which setup
+      asks for its edition when branch_analysis is auto. Empty (the default)
+      uses SONAR_HOST_URL, then the file's sonar.host.url, as the scanner
+      does. Give scan the same value.
+    default: ""
+  project_key:
+    description: >
+      The project's key (sonar.projectKey), in place of the file's. Empty (the
+      default) uses the file's.
+    default: ""
+  properties_file:
+    description: >
+      The project's properties file, relative to working_dir. Another name
+      than sonar-project.properties is passed to the scanner as
+      project.settings.
+    default: sonar-project.properties
+  pull_request_base:
+    description: >
+      The branch the pull request goes into (sonar.pullrequest.base). Empty
+      (the default) uses GITHUB_BASE_REF on GitHub Actions; on CircleCI, which
+      doesn't say, it leaves it out, and SonarQube then uses the project's
+      main branch.
+    default: ""
+  pull_request_branch:
+    description: >
+      The pull request's branch (sonar.pullrequest.branch), in place of
+      CIRCLE_BRANCH or GITHUB_HEAD_REF.
+    default: ""
+  pull_request_key:
+    description: >
+      The pull request's number (sonar.pullrequest.key), in place of the one
+      CircleCI (from CIRCLE_PULL_REQUEST) or GitHub Actions names.
+    default: ""
+  require_properties_file:
+    description: >
+      Fail when properties_file doesn't exist. Set to false for a project
+      configured by parameters alone, with project_key here and the rest in
+      scan's properties.
+    default: "true"
+  token:
+    description: >
+      Name of the environment variable that holds a SonarQube token, which
+      setup uses to ask the server for its edition. It only goes over https,
+      or to localhost.
+    default: SONAR_TOKEN
+  working_dir:
+    description: >
+      Directory to run in: the project's base directory, which holds its
+      sonar-project.properties. Run scan in the same one.
+    default: .
+
+runs:
+  using: composite
+  steps:
+    - name: Set up the SonarQube analysis
+      shell: bash
+      working-directory: ${{ inputs.working_dir }}
+      env:
+        PARAM_BRANCH_ANALYSIS: ${{ inputs.branch_analysis }}
+        PARAM_BRANCH_NAME: ${{ inputs.branch_name }}
+        PARAM_HOST_URL: ${{ inputs.host_url }}
+        PARAM_PROJECT_KEY: ${{ inputs.project_key }}
+        PARAM_PROPERTIES_FILE: ${{ inputs.properties_file }}
+        PARAM_PULL_REQUEST_BASE: ${{ inputs.pull_request_base }}
+        PARAM_PULL_REQUEST_BRANCH: ${{ inputs.pull_request_branch }}
+        PARAM_PULL_REQUEST_KEY: ${{ inputs.pull_request_key }}
+        PARAM_REQUIRE_PROPERTIES_FILE: ${{ inputs.require_properties_file }}
+        PARAM_TOKEN: ${{ inputs.token }}
+      run: >-
+        bash "${GITHUB_ACTION_PATH}/../run_script.sh" "${GITHUB_ACTION_PATH}/../../src/scripts/setup.sh"
+        "SCRIPT_SONARQUBE_LIB=${GITHUB_ACTION_PATH}/../../src/scripts/lib/sonarqube.sh"

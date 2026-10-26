@@ -1,0 +1,312 @@
+version: 2.1
+orbs:
+  # Your orb will be automatically injected here during the pipeline.
+  # Reference your orb's jobs and commands below as they will exist when built.
+  orb-tools: circleci/orb-tools@12.5
+  # The orb definition is intentionally not included here. It will be injected into the pipeline.
+  sonarqube-orb: {}
+
+# Use this tag to ensure test jobs always run,
+# even though the downstream publish job will only run on release tags.
+filters: &filters
+  tags:
+    only: /.*/
+
+# Filter for release tags.
+release-filters: &release-filters
+  branches:
+    ignore: /.*/
+  tags:
+    only: /^v[0-9]+\.[0-9]+\.[0-9]+$/
+
+# The project the scans analyze: a few lines of Python with issues SonarQube's default quality
+# profile reports.
+project: &project tests/fixtures/project
+
+commands:
+  # Starts SonarQube Community Build in a container on this machine, waits for it, and exports
+  # SONAR_HOST_URL and a user token (SONAR_TOKEN) for later steps.
+  start-sonarqube:
+    parameters:
+      image:
+        type: string
+    steps:
+      - run:
+          name: Start SonarQube << parameters.image >>
+          command: |
+            docker run -d --name sonarqube -p 9000:9000 -e SONAR_ES_BOOTSTRAP_CHECKS_DISABLE=true "sonarqube:<< parameters.image >>"
+            bash tests/sonarqube_server.sh token http://localhost:9000 /tmp/sonar-token
+            printf 'export SONAR_HOST_URL=%q\nexport SONAR_TOKEN=%q\n' http://localhost:9000 "$(cat /tmp/sonar-token)" >> "${BASH_ENV}"
+
+jobs:
+  # Installs the default version on cimg/base, which has no Java, checks that it is the pinned
+  # release with its own Java runtime, and that a second install takes it from the cache.
+  install-test:
+    docker:
+      - image: cimg/base:current
+    steps:
+      - checkout
+      - sonarqube-orb/install
+      - run:
+          name: Verify The Install
+          command: |
+            if command -v java; then
+              echo "FAIL: this test needs an image without Java."
+              exit 1
+            fi
+            [[ "$(command -v sonar-scanner)" == "${HOME}/.sonarqube-orb/sonar-scanner/bin/sonar-scanner" ]]
+            version=$(grep -A3 '^  version:' src/commands/install.yml | sed -n 's/^    default: "\(.*\)"$/\1/p')
+            sonar-scanner --version | tee /tmp/version.log
+            grep -q "SonarScanner CLI ${version}\." /tmp/version.log
+            grep -q "^version=${version}\." "${HOME}/.sonarqube-orb/sonar-scanner/.sonarqube-orb"
+            grep -q '^sha512=[0-9a-f]\{128\}$' "${HOME}/.sonarqube-orb/sonar-scanner/.sonarqube-orb"
+            [[ -x "${HOME}/.sonarqube-orb/sonar-scanner/jre/bin/java" ]]
+      - run:
+          name: Verify A Second Install Uses The Cache
+          command: |
+            version=$(grep -A3 '^  version:' src/commands/install.yml | sed -n 's/^    default: "\(.*\)"$/\1/p')
+            PARAM_VERSION="${version}" PARAM_VERIFY_CHECKSUMS=strict PARAM_INSTALL_PATH="" PARAM_CACHING=true \
+              PARAM_DOWNLOAD_BASE_URL="" bash src/scripts/install.sh 2>&1 | tee /tmp/second-install.log
+            grep -q "from the cache." /tmp/second-install.log
+            if grep -q "^Downloading" /tmp/second-install.log; then
+              echo "FAIL: the second install downloaded the scanner again."
+              exit 1
+            fi
+      - sonarqube-orb/install:
+          version: 7.0.0.4796
+          install_path: ~/scanner-7
+      - run:
+          name: Verify A Full Version Installs The Oldest Listed Release
+          command: |
+            ~/scanner-7/bin/sonar-scanner --version | grep -q "SonarScanner CLI 7.0.0.4796"
+  checksum-test:
+    docker:
+      - image: cimg/python:3.13
+    environment:
+      UNLISTED: 6.2.1.4610
+    steps:
+      - checkout
+      - run:
+          name: Unlisted Versions Fail Closed By Default
+          command: |
+            REPO_DIR=$(pwd)
+            cd "$(mktemp -d)"
+            if HOME="$(pwd)" PARAM_INSTALL_PATH="$(pwd)/scanner" PARAM_VERIFY_CHECKSUMS=strict PARAM_VERSION="${UNLISTED}" \
+                PARAM_CACHING=true PARAM_DOWNLOAD_BASE_URL="" bash "${REPO_DIR}/src/scripts/install.sh"; then
+              echo "FAIL: install succeeded for unlisted ${UNLISTED}."
+              exit 1
+            fi
+            if [[ -n "$(ls -A)" ]]; then
+              echo "FAIL: install downloaded or installed something before rejecting the unlisted version."
+              ls -laR
+              exit 1
+            fi
+      - run:
+          name: known_versions Installs An Unlisted Full Version Unverified
+          command: |
+            REPO_DIR=$(pwd)
+            cd "$(mktemp -d)"
+            PARAM_INSTALL_PATH="$(pwd)/scanner" PARAM_VERIFY_CHECKSUMS=known_versions PARAM_VERSION="${UNLISTED}" \
+              PARAM_CACHING=false PARAM_DOWNLOAD_BASE_URL="" bash "${REPO_DIR}/src/scripts/install.sh" 2>&1 | tee install.log
+            grep -q "has no checksum for SonarScanner CLI ${UNLISTED%.*}" install.log
+            grep -q "UNVERIFIED" install.log
+            scanner/bin/sonar-scanner --version | grep -q "SonarScanner CLI ${UNLISTED}"
+      - run:
+          name: A Mirror In Maven's Layout Serves The Release, And A Tampered One Is Rejected
+          command: |
+            REPO_DIR=$(pwd)
+            VERSION=8.2.0.6438
+            ASSET="sonar-scanner-cli-${VERSION}-linux-x64.zip"
+            MIRROR=$(mktemp -d)
+            DIR="${MIRROR}/www/maven/org/sonarsource/scanner/cli/sonar-scanner-cli/${VERSION}"
+            mkdir -p "${DIR}"
+            curl --fail --silent --show-error --location --proto '=https' --output "${DIR}/${ASSET}" \
+              "https://repo1.maven.org/maven2/org/sonarsource/scanner/cli/sonar-scanner-cli/${VERSION}/${ASSET}"
+            openssl req -x509 -newkey rsa:2048 -nodes -keyout "${MIRROR}/key.pem" -out "${MIRROR}/cert.pem" -days 1 \
+              -subj /CN=localhost -addext subjectAltName=DNS:localhost 2> /dev/null
+            cat > "${MIRROR}/serve.py" \<< 'EOF'
+            import functools, http.server, ssl, sys
+            handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=sys.argv[1])
+            server = http.server.HTTPServer(("127.0.0.1", 8443), handler)
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            context.load_cert_chain(sys.argv[2], sys.argv[3])
+            server.socket = context.wrap_socket(server.socket, server_side=True)
+            server.serve_forever()
+            EOF
+            python3 "${MIRROR}/serve.py" "${MIRROR}/www" "${MIRROR}/cert.pem" "${MIRROR}/key.pem" > "${MIRROR}/serve.log" 2>&1 &
+            SERVER=$!
+            trap 'kill "${SERVER}"' EXIT
+            sleep 2
+            install_from_mirror() {
+              rm -rf "${MIRROR}/scanner"
+              CURL_CA_BUNDLE="${MIRROR}/cert.pem" PARAM_INSTALL_PATH="${MIRROR}/scanner" PARAM_VERIFY_CHECKSUMS=strict \
+                PARAM_VERSION="${VERSION%.*}" PARAM_CACHING=false PARAM_DOWNLOAD_BASE_URL=https://localhost:8443/maven \
+                bash "${REPO_DIR}/src/scripts/install.sh"
+            }
+            install_from_mirror 2>&1 | tee "${MIRROR}/good.log"
+            grep -q "Downloading https://localhost:8443/maven/org/sonarsource/scanner/cli/sonar-scanner-cli/${VERSION}/${ASSET}" "${MIRROR}/good.log"
+            "${MIRROR}/scanner/bin/sonar-scanner" --version | grep -q "SonarScanner CLI ${VERSION}"
+            printf 'tampered' >> "${DIR}/${ASSET}"
+            if install_from_mirror > "${MIRROR}/bad.log" 2>&1; then
+              cat "${MIRROR}/bad.log"
+              echo "FAIL: a tampered release from the mirror was installed."
+              exit 1
+            fi
+            cat "${MIRROR}/bad.log"
+            grep -q "Checksum verification failed." "${MIRROR}/bad.log"
+  arm64-test:
+    docker:
+      - image: cimg/base:current
+    resource_class: arm.medium
+    steps:
+      - checkout
+      - sonarqube-orb/install
+      - run:
+          name: Verify The arm64 Install
+          command: |
+            grep -q '^arch=arm64$' "${HOME}/.sonarqube-orb/sonar-scanner/.sonarqube-orb"
+            sonar-scanner --version | grep -q "aarch64"
+  # Every command against SonarQube Community Build, with the oldest and the newest scanner the
+  # orb lists, and an older and the newest server.
+  scan-test:
+    parameters:
+      scanner:
+        type: string
+      server:
+        type: string
+    machine:
+      image: ubuntu-2404:current
+    resource_class: large
+    steps:
+      - checkout
+      - start-sonarqube:
+          image: << parameters.server >>
+      - sonarqube-orb/install:
+          version: << parameters.scanner >>
+      - sonarqube-orb/setup:
+          working_dir: *project
+      - run:
+          name: Verify Setup Left Out Branch Properties For Community Build
+          command: |
+            [[ -z "${SONARQUBE_ORB_PROPERTIES}" ]]
+      - sonarqube-orb/scan:
+          working_dir: *project
+          quality_gate_wait: true
+      - run:
+          name: Verify The Analysis
+          command: |
+            [[ "${SONAR_DASHBOARD_URL}" == "http://localhost:9000/dashboard?id=sonarqube-orb-fixture" ]]
+            [[ -f "${SONARQUBE_ORB_REPORT_TASK}" ]]
+            curl -sS --fail -H "Authorization: Bearer ${SONAR_TOKEN}" \
+              "http://localhost:9000/api/ce/task?id=${SONAR_CE_TASK_ID}" | jq -e '.task.status == "SUCCESS"'
+            grep -qx "ceTaskId=${SONAR_CE_TASK_ID}" tests/fixtures/project/.scannerwork/sonarqube-orb.properties
+            base=$(sed -n 's/^projectBaseDir=//p' tests/fixtures/project/.scannerwork/sonarqube-orb.properties)
+            [[ "$(readlink -f "${base}")" == "$(readlink -f tests/fixtures/project)" ]]
+      - sonarqube-orb/export_sarif:
+          working_dir: *project
+          when: always
+      - run:
+          name: Verify The SARIF File
+          command: |
+            sarif=/tmp/sonarqube-reports/sonarqube.sarif
+            [[ "${SONAR_SARIF_FILE}" == "${sarif}" ]]
+            jq -e '.version == "2.1.0" and (.runs | length) == 1' "${sarif}"
+            jq -e '.runs[0].automationDetails.id == "sonarqube/sonarqube-orb-fixture/"' "${sarif}"
+            # Which rules the default profile reports differs between server
+            # releases; every one reports the identical operands of "==".
+            jq -e 'any(.runs[0].results[]; .ruleId == "python:S1764")' "${sarif}"
+            jq -e 'all(.runs[0].results[]; .locations[0].physicalLocation.artifactLocation.uri == "tests/fixtures/project/src/greeting.py"
+              and .locations[0].physicalLocation.region.startLine >= 1
+              and (.partialFingerprints.primaryLocationLineHash | length) > 0)' "${sarif}"
+            jq -e 'all(.runs[0].tool.driver.rules[]; (.shortDescription.text | length) > 0)' "${sarif}"
+      - run:
+          name: Verify A Failing Quality Gate Fails The Scan, And Still Exports The Analysis
+          command: |
+            bash tests/sonarqube_server.sh failing-gate http://localhost:9000 /tmp/sonar-token sonarqube-orb-fixture
+            : > /tmp/bash_env
+            if BASH_ENV=/tmp/bash_env bash tests/run_command.sh scan working_dir=tests/fixtures/project quality_gate_wait=true \
+                > /tmp/run.log 2>&1; then
+              cat /tmp/run.log
+              echo "FAIL: the scan passed a failing quality gate."
+              exit 1
+            fi
+            cat /tmp/run.log
+            grep -qF "ERROR: The analysis failed its quality gate" /tmp/run.log
+            grep -q '^export SONARQUBE_ORB_REPORT_TASK=' /tmp/bash_env
+      - run:
+          name: Verify Community Build Refusing A Branch Points At branch_analysis
+          command: |
+            : > /tmp/bash_env
+            BASH_ENV=/tmp/bash_env bash tests/run_command.sh setup working_dir=tests/fixtures/project branch_analysis=true branch_name=feature/x
+            # Every bash sources BASH_ENV as it starts, so the scan gets setup's properties through it.
+            if BASH_ENV=/tmp/bash_env bash tests/run_command.sh scan working_dir=tests/fixtures/project > /tmp/run.log 2>&1; then
+              cat /tmp/run.log
+              echo "FAIL: Community Build analyzed a branch."
+              exit 1
+            fi
+            cat /tmp/run.log
+            grep -qF "Set setup's branch_analysis to auto or false" /tmp/run.log
+  # The scan on the scanner's own Java runtime, with debug output.
+  skip-jre-test:
+    machine:
+      image: ubuntu-2404:current
+    resource_class: large
+    steps:
+      - checkout
+      - start-sonarqube:
+          image: 26.10.0.133078-community
+      - sonarqube-orb/install
+      - sonarqube-orb/setup:
+          working_dir: *project
+      - sonarqube-orb/scan:
+          working_dir: *project
+          skip_jre_provisioning: true
+          verbose: true
+          quality_gate_wait: true
+          properties: |
+            sonar.projectName=sonarqube-orb fixture, scanner's Java
+      - run:
+          name: Verify The Analysis
+          command: |
+            curl -sS --fail -H "Authorization: Bearer ${SONAR_TOKEN}" \
+              "http://localhost:9000/api/ce/task?id=${SONAR_CE_TASK_ID}" | jq -e '.task.status == "SUCCESS"'
+            grep -qx "ceTaskId=${SONAR_CE_TASK_ID}" tests/fixtures/project/.scannerwork/sonarqube-orb.properties
+            base=$(sed -n 's/^projectBaseDir=//p' tests/fixtures/project/.scannerwork/sonarqube-orb.properties)
+            [[ "$(readlink -f "${base}")" == "$(readlink -f tests/fixtures/project)" ]]
+
+workflows:
+  test-deploy:
+    jobs:
+      # Make sure to include "filters: *filters" in every test job you want to run as part of your deployment.
+      # Test your orb's commands in a custom job and test your orb's jobs directly as a part of this workflow.
+      - install-test:
+          filters: *filters
+      - checksum-test:
+          filters: *filters
+      - arm64-test:
+          filters: *filters
+      - scan-test:
+          matrix:
+            parameters:
+              scanner: ["7.0.0", "8.2.0"]
+              server: ["25.9.0.112764-community", "26.10.0.133078-community"]
+          filters: *filters
+      - skip-jre-test:
+          filters: *filters
+      # The orb must be re-packed for publishing, and saved to the workspace.
+      - orb-tools/pack:
+          filters: *release-filters
+      - orb-tools/publish:
+          orb_name: juburr/sonarqube-orb
+          vcs_type: << pipeline.project.type >>
+          pub_type: production
+          # Ensure this job requires all test jobs and the pack job.
+          requires:
+            - orb-tools/pack
+            - install-test
+            - checksum-test
+            - arm64-test
+            - scan-test
+            - skip-jre-test
+          context: orb-publishing
+          filters: *release-filters

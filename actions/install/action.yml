@@ -1,0 +1,93 @@
+name: Install the SonarScanner CLI
+description: >
+  Installs the SonarScanner CLI for Linux on amd64 or arm64, picked from the
+  machine's CPU architecture, after verifying its SHA-512 checksum. It
+  installs SonarSource's package with its own Java runtime, so the executor
+  needs no Java (cimg/base works), only bash, curl or wget, and unzip. Run
+  this before scan. The GitHub Actions twin of the orb's install command.
+author: juburr
+
+inputs:
+  caching:
+    description: >
+      Cache the downloaded release between jobs, keyed by version, CPU
+      architecture and home directory. Only verified releases are cached, and
+      a cached release is verified again before it is installed.
+    default: "true"
+  download_base_url:
+    description: >
+      An https:// mirror to download from in place of
+      https://binaries.sonarsource.com and Maven Central, such as an
+      Artifactory or Nexus remote repository of either: the mirror is tried
+      with SonarSource's paths (/Distribution/sonar-scanner-cli/...), then
+      Maven's (/org/sonarsource/scanner/cli/...). The checksum table, not the
+      mirror, decides what is installed. It must not hold credentials, a query
+      or a fragment.
+    default: ""
+  install_path:
+    description: >
+      Absolute path of the directory to install the scanner into: it holds the
+      whole release (launcher, jar and Java runtime), and its bin directory is
+      added to the PATH of later steps. It must be missing, empty, or an
+      earlier install of this command's, and writable without root. Defaults
+      to $HOME/.sonarqube-orb/sonar-scanner.
+    default: ""
+  verify_checksums:
+    description: >
+      SHA-512 verification against this orb's checksum table. "strict"
+      (default) fails before downloading anything when the version has no
+      checksum in the table. "known_versions" verifies listed versions and
+      installs unlisted versions unverified, with a warning: give those as the
+      full version SonarSource publishes, such as 8.2.0.6438. "false" skips
+      verification and is not recommended.
+    default: strict
+  version:
+    description: >
+      Version of the SonarScanner CLI to install, such as 8.2.0, or the full
+      version with its build number, such as 8.2.0.6438. A leading "v" is
+      ignored.
+    default: "8.2.0"
+
+runs:
+  using: composite
+  steps:
+    # The key is computed from a file that names the CPU (uname -m), HOME (a
+    # cache is restored to the absolute path it was saved from) and the
+    # version, as the orb's command computes it.
+    - name: Prepare SonarScanner CLI cache key
+      id: cache-key
+      if: (inputs.caching == 'true' || inputs.caching == '1')
+      shell: bash
+      env:
+        ORB_CACHE_KEY_FILE: ${{ runner.temp }}/sonarqube-orb-cache-key
+        PARAM_VERSION: ${{ inputs.version }}
+      run: |
+        bash "${GITHUB_ACTION_PATH}/../../src/scripts/cache_key.sh"
+        # Bump the version in the key when an existing checksum table entry
+        # changes, so caches saved for the old bytes stop being restored.
+        printf 'key=sonarqube-orb-v1-%s\n' "$(sha256sum < "${RUNNER_TEMP}/sonarqube-orb-cache-key" | cut -c1-64)" >> "${GITHUB_OUTPUT}"
+    - name: Restore the SonarScanner CLI cache
+      id: restore
+      if: (inputs.caching == 'true' || inputs.caching == '1')
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.cache/sonarqube-orb
+        key: ${{ steps.cache-key.outputs.key }}
+    - name: Install the SonarScanner CLI
+      shell: bash
+      env:
+        PARAM_CACHING: ${{ inputs.caching }}
+        PARAM_DOWNLOAD_BASE_URL: ${{ inputs.download_base_url }}
+        PARAM_INSTALL_PATH: ${{ inputs.install_path }}
+        PARAM_VERIFY_CHECKSUMS: ${{ inputs.verify_checksums }}
+        PARAM_VERSION: ${{ inputs.version }}
+      run: bash "${GITHUB_ACTION_PATH}/../run_script.sh" "${GITHUB_ACTION_PATH}/../../src/scripts/install.sh"
+    # A saved cache can't be replaced, so it is only saved when none was
+    # restored. Like the orb's save_cache, it is saved right after the
+    # install, not at the end of the job.
+    - name: Save the SonarScanner CLI cache
+      if: (inputs.caching == 'true' || inputs.caching == '1') && steps.restore.outputs.cache-hit != 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.cache/sonarqube-orb
+        key: ${{ steps.cache-key.outputs.key }}

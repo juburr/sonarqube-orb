@@ -1,0 +1,120 @@
+name: Export SonarQube issues as SARIF
+description: >
+  Writes the unresolved issues of the analysis scan sent to a SARIF 2.1.0
+  file, which GitHub code scanning (upload_sarif) and other tools can read.
+  SonarQube has no SARIF export, so this reads the analysis from the Web API:
+  it waits for the server to process it, then reads the analyzed branch's or
+  pull request's issues and their rules' names. Each result is placed in the
+  file the issue is in, relative to the repository's root, with a level from
+  the issue's severity, and a security-severity for security issues. Run it
+  after scan, in the same job; it exports the file's path for upload_sarif.
+  Needs jq, curl, and a token with Browse and Execute Analysis permission on
+  the project, such as a user token. The GitHub Actions twin of the orb's
+  export_sarif command.
+author: juburr
+
+inputs:
+  category:
+    description: >
+      The category of the analysis in GitHub code scanning
+      (runAutomationDetails), followed by the project's key, so this project's
+      alerts replace only its own.
+    default: sonarqube
+  host_url:
+    description: >
+      The server's URL. Empty (the default) uses SONAR_HOST_URL, then the
+      serverUrl the scanner wrote to its report.
+    default: ""
+  max_issues_truncate:
+    description: >
+      Write the first 10,000 issues when there are more, the most SonarQube
+      returns, instead of failing.
+    default: "false"
+  output_dir:
+    description: >
+      Absolute path of the directory to write the SARIF file into.
+    default: /tmp/sonarqube-reports
+  report_name:
+    description: >
+      The SARIF file's name, without extension: <report_name>.sarif.
+    default: sonarqube
+  report_task_file:
+    description: >
+      The report-task.txt the scanner wrote, which names the analysis. Empty
+      (the default) uses the one scan exported (SONARQUBE_ORB_REPORT_TASK),
+      then .scannerwork/report-task.txt.
+    default: ""
+  sarif_file_env_var:
+    description: >
+      Environment variable to export the SARIF file's path to, which
+      upload_sarif reads.
+    default: SONAR_SARIF_FILE
+  store_artifacts:
+    description: >
+      Upload output_dir as a workflow artifact, named
+      sonarqube-reports-<report_name> and a random suffix, including when the
+      step fails.
+    default: "true"
+  token:
+    description: >
+      Name of the environment variable that holds a SonarQube token with
+      Browse and Execute Analysis permission on the project, such as a user
+      token. Project and global analysis tokens can't read issues. It only
+      goes over https, or to localhost.
+    default: SONAR_TOKEN
+  wait_timeout:
+    description: >
+      How many seconds to wait for the server to process the analysis.
+    default: "300"
+  when:
+    description: >
+      When the step runs: "always" also runs it after an earlier step failed,
+      such as a scan whose quality gate failed. On GitHub Actions, give the
+      step if: always() instead.
+    default: on_success
+  working_dir:
+    description: >
+      Directory to run in: the one scan ran in, the project's base directory.
+      The issues' paths are made relative to the repository it is in.
+    default: .
+
+runs:
+  using: composite
+  steps:
+    # Artifact names must be unique in a workflow run, and the same command
+    # can run in several jobs or matrix legs, so the name ends in a random
+    # suffix.
+    - name: Name the reports artifact
+      id: artifact
+      if: (inputs.store_artifacts == 'true' || inputs.store_artifacts == '1')
+      shell: bash
+      env:
+        REPORT_NAME: ${{ inputs.report_name }}
+      run: |
+        if [[ ! "${REPORT_NAME}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+            REPORT_NAME=reports
+        fi
+        printf 'name=sonarqube-reports-%s-%s\n' "${REPORT_NAME}" "$(od -An -tx1 -N4 /dev/urandom | tr -d ' \n')" >> "${GITHUB_OUTPUT}"
+    - name: Export SonarQube issues as SARIF
+      shell: bash
+      working-directory: ${{ inputs.working_dir }}
+      env:
+        PARAM_CATEGORY: ${{ inputs.category }}
+        PARAM_HOST_URL: ${{ inputs.host_url }}
+        PARAM_MAX_ISSUES_TRUNCATE: ${{ inputs.max_issues_truncate }}
+        PARAM_OUTPUT_DIR: ${{ inputs.output_dir }}
+        PARAM_REPORT_NAME: ${{ inputs.report_name }}
+        PARAM_REPORT_TASK_FILE: ${{ inputs.report_task_file }}
+        PARAM_SARIF_FILE_ENV_VAR: ${{ inputs.sarif_file_env_var }}
+        PARAM_TOKEN: ${{ inputs.token }}
+        PARAM_WAIT_TIMEOUT: ${{ inputs.wait_timeout }}
+      run: >-
+        bash "${GITHUB_ACTION_PATH}/../run_script.sh" "${GITHUB_ACTION_PATH}/../../src/scripts/export_sarif.sh"
+        "SCRIPT_SONARQUBE_LIB=${GITHUB_ACTION_PATH}/../../src/scripts/lib/sonarqube.sh"
+    - name: Upload the reports
+      if: always() && (inputs.store_artifacts == 'true' || inputs.store_artifacts == '1')
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: ${{ steps.artifact.outputs.name }}
+        path: ${{ inputs.output_dir }}
+        if-no-files-found: ignore

@@ -1,0 +1,241 @@
+# Tests the GitHub Actions in actions/ on GitHub's own runners, as
+# .circleci/test-deploy.yml tests the orb's commands on CircleCI. Each job
+# runs the actions from this checkout (uses: ./actions/...), so a pull
+# request tests its own changes.
+name: GitHub Actions
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  offline-tests:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Run the offline tests
+        run: |
+          for test in tests/*_test.sh; do
+            echo "=== ${test}"
+            bash "${test}"
+          done
+
+  install:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: amd64
+            platform: x64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+            platform: aarch64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./actions/install
+      - name: Verify the install
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          version=$(grep -A3 '^  version:' src/commands/install.yml | sed -n 's/^    default: "\(.*\)"$/\1/p')
+          [[ "$(command -v sonar-scanner)" == "${HOME}/.sonarqube-orb/sonar-scanner/bin/sonar-scanner" ]]
+          sonar-scanner --version | tee /tmp/version.log
+          grep -q "SonarScanner CLI ${version}\." /tmp/version.log
+          grep -qx "arch=${ARCH}" "${HOME}/.sonarqube-orb/sonar-scanner/.sonarqube-orb"
+          [[ -x "${HOME}/.sonarqube-orb/sonar-scanner/jre/bin/java" ]]
+      - uses: ./actions/install
+        with:
+          version: 7.0.0.4796
+          install_path: ~/scanner-7
+      - name: Verify a full version installs the oldest listed release
+        run: ~/scanner-7/bin/sonar-scanner --version | grep -q "SonarScanner CLI 7.0.0.4796"
+      - id: unlisted
+        uses: ./actions/install
+        continue-on-error: true
+        with:
+          version: 6.2.1.4610
+          install_path: ~/unlisted
+      - name: Verify an unlisted version fails closed
+        env:
+          OUTCOME: ${{ steps.unlisted.outcome }}
+        run: |
+          [[ "${OUTCOME}" == "failure" ]]
+          [[ ! -e ~/unlisted ]]
+
+  # With the download hosts blocked, the install must come from the cache
+  # the install job saved.
+  install-from-cache:
+    needs: install
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Block the download hosts
+        run: |
+          echo "127.0.0.1 binaries.sonarsource.com repo1.maven.org" | sudo tee -a /etc/hosts
+          if curl -sS --max-time 10 -o /dev/null https://binaries.sonarsource.com/; then
+            echo "binaries.sonarsource.com is still reachable."
+            exit 1
+          fi
+      - uses: ./actions/install
+      - name: Verify the install came from the cache
+        run: |
+          version=$(grep -A3 '^  version:' src/commands/install.yml | sed -n 's/^    default: "\(.*\)"$/\1/p')
+          sonar-scanner --version | grep -q "SonarScanner CLI ${version}\."
+
+  # Every action against SonarQube Community Build, with the oldest and the
+  # newest scanner the orb lists, and an older and the newest server.
+  scan:
+    strategy:
+      fail-fast: false
+      matrix:
+        scanner: ["7.0.0", "8.2.0"]
+        server: ["25.9.0.112764-community", "26.10.0.133078-community"]
+    runs-on: ubuntu-24.04
+    services:
+      sonarqube:
+        image: sonarqube:${{ matrix.server }}
+        ports:
+          - 9000:9000
+        env:
+          SONAR_ES_BOOTSTRAP_CHECKS_DISABLE: "true"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # SonarQube blames lines and finds new code from the history.
+          fetch-depth: 0
+      - name: Get a token from the server
+        run: |
+          bash tests/sonarqube_server.sh token http://localhost:9000 "${RUNNER_TEMP}/sonar-token"
+          token=$(cat "${RUNNER_TEMP}/sonar-token")
+          echo "::add-mask::${token}"
+          {
+            echo "SONAR_HOST_URL=http://localhost:9000"
+            echo "SONAR_TOKEN=${token}"
+          } >> "${GITHUB_ENV}"
+      - uses: ./actions/install
+        with:
+          version: ${{ matrix.scanner }}
+      - uses: ./actions/setup
+        with:
+          working_dir: tests/fixtures/project
+      - name: Verify setup left out branch properties for Community Build
+        run: |
+          [[ -z "${SONARQUBE_ORB_PROPERTIES}" ]]
+      - uses: ./actions/scan
+        with:
+          working_dir: tests/fixtures/project
+          quality_gate_wait: "true"
+      - name: Verify the analysis
+        run: |
+          [[ "${SONAR_DASHBOARD_URL}" == "http://localhost:9000/dashboard?id=sonarqube-orb-fixture" ]]
+          curl -sS --fail -H "Authorization: Bearer ${SONAR_TOKEN}" \
+            "http://localhost:9000/api/ce/task?id=${SONAR_CE_TASK_ID}" | jq -e '.task.status == "SUCCESS"'
+          grep -qx "ceTaskId=${SONAR_CE_TASK_ID}" tests/fixtures/project/.scannerwork/sonarqube-orb.properties
+          base=$(sed -n 's/^projectBaseDir=//p' tests/fixtures/project/.scannerwork/sonarqube-orb.properties)
+          [[ "$(readlink -f "${base}")" == "$(readlink -f tests/fixtures/project)" ]]
+      - uses: ./actions/export_sarif
+        with:
+          working_dir: tests/fixtures/project
+          output_dir: ${{ runner.temp }}/reports
+      - name: Verify the SARIF file against the SARIF 2.1.0 schema
+        run: |
+          sarif="${RUNNER_TEMP}/reports/sonarqube.sarif"
+          [[ "${SONAR_SARIF_FILE}" == "${sarif}" ]]
+          # Which rules the default profile reports differs between server
+          # releases; every one reports the identical operands of "==".
+          jq -e 'any(.runs[0].results[]; .ruleId == "python:S1764")' "${sarif}"
+          jq -e 'all(.runs[0].results[]; .locations[0].physicalLocation.artifactLocation.uri == "tests/fixtures/project/src/greeting.py")' "${sarif}"
+          curl --fail --silent --show-error --location --proto '=https' --output "${RUNNER_TEMP}/sarif-schema-2.1.0.json" \
+            https://docs.oasis-open.org/sarif/sarif/v2.1.0/errata01/os/schemas/sarif-schema-2.1.0.json
+          echo "c3b4bb2d6093897483348925aaa73af03b3e3f4bd4ca38cef26dcb4212a2682e  ${RUNNER_TEMP}/sarif-schema-2.1.0.json" | sha256sum -c -
+          python3 -m venv "${RUNNER_TEMP}/venv"
+          "${RUNNER_TEMP}/venv/bin/pip" install --quiet jsonschema==4.23.0
+          "${RUNNER_TEMP}/venv/bin/python" - "${RUNNER_TEMP}/sarif-schema-2.1.0.json" "${sarif}" << 'EOF'
+          import json, sys
+          import jsonschema
+          schema = json.load(open(sys.argv[1]))
+          jsonschema.validators.validator_for(schema)(schema).validate(json.load(open(sys.argv[2])))
+          print("The SARIF file is valid SARIF 2.1.0.")
+          EOF
+      - name: Make the quality gate fail
+        run: bash tests/sonarqube_server.sh failing-gate http://localhost:9000 "${RUNNER_TEMP}/sonar-token" sonarqube-orb-fixture
+      - id: failing
+        uses: ./actions/scan
+        continue-on-error: true
+        with:
+          working_dir: tests/fixtures/project
+          quality_gate_wait: "true"
+      - name: Verify the failing quality gate failed the scan
+        env:
+          OUTCOME: ${{ steps.failing.outcome }}
+        run: |
+          [[ "${OUTCOME}" == "failure" ]]
+
+  # Uploads the SARIF file of an analysis to this repository's code
+  # scanning, only when run by hand, so the tests leave no alerts behind.
+  # GitHub takes it for a public repository, or with GitHub Code Security.
+  upload-sarif:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      security-events: write
+    services:
+      sonarqube:
+        image: sonarqube:26.10.0.133078-community
+        ports:
+          - 9000:9000
+        env:
+          SONAR_ES_BOOTSTRAP_CHECKS_DISABLE: "true"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Get a token from the server
+        run: |
+          bash tests/sonarqube_server.sh token http://localhost:9000 "${RUNNER_TEMP}/sonar-token"
+          token=$(cat "${RUNNER_TEMP}/sonar-token")
+          echo "::add-mask::${token}"
+          {
+            echo "SONAR_HOST_URL=http://localhost:9000"
+            echo "SONAR_TOKEN=${token}"
+          } >> "${GITHUB_ENV}"
+      - uses: ./actions/install
+      - uses: ./actions/setup
+        with:
+          working_dir: tests/fixtures/project
+      - uses: ./actions/scan
+        with:
+          working_dir: tests/fixtures/project
+      - uses: ./actions/export_sarif
+        with:
+          working_dir: tests/fixtures/project
+          category: sonarqube-orb-test
+          output_dir: ${{ runner.temp }}/reports
+      - uses: ./actions/upload_sarif
+        env:
+          GITHUB_TOKEN: ${{ github.token }}

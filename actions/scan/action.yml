@@ -1,0 +1,106 @@
+name: Run a SonarQube analysis
+description: >
+  Analyzes the project with the SonarScanner CLI (sonar-scanner) and sends the
+  analysis to SonarQube. It runs in working_dir, where the scanner reads
+  sonar-project.properties, and passes on what setup worked out, if it ran.
+  The token reaches the scanner in its environment, never on its command line.
+  Afterwards it exports the analysis' dashboard URL and the server's task ID,
+  also when the quality gate fails, for later steps such as export_sarif (on
+  GitHub Actions, a failed step exports nothing, and export_sarif finds the
+  scanner's report in working_dir instead). Run install first, and setup to
+  analyze branches and pull requests. The GitHub Actions twin of the orb's
+  scan command.
+author: juburr
+
+inputs:
+  dashboard_url_env_var:
+    description: >
+      Environment variable to export the analysis' dashboard URL to, for later
+      steps.
+    default: SONAR_DASHBOARD_URL
+  extra_args:
+    description: >
+      More sonar-scanner arguments, split like shell words. Nothing in them is
+      expanded or run. Credentials are refused: use token.
+    default: ""
+  host_url:
+    description: >
+      The server's URL, such as https://sonarqube.example.com, passed as
+      sonar.host.url. Empty (the default) leaves it to the scanner, which uses
+      SONAR_HOST_URL, then the file's sonar.host.url, and otherwise SonarQube
+      Cloud.
+    default: ""
+  java_opts:
+    description: >
+      Options for the scanner's Java runtime, such as -Xmx2g for a large
+      project, passed as SONAR_SCANNER_OPTS and SONAR_SCANNER_JAVA_OPTS.
+    default: ""
+  properties:
+    description: >
+      More analysis properties, one key=value per line, such as
+      sonar.exclusions=**/generated/**, passed as -D. They win over the
+      properties file and setup. Lines starting with # are skipped.
+      Credentials are refused: use token.
+    default: ""
+  quality_gate_timeout:
+    description: >
+      With quality_gate_wait, how many seconds to wait for the server to
+      process the analysis (sonar.qualitygate.timeout).
+    default: "300"
+  quality_gate_wait:
+    description: >
+      Wait for the server to process the analysis and fail the step when the
+      quality gate fails (sonar.qualitygate.wait).
+    default: "false"
+  skip_jre_provisioning:
+    description: >
+      Run the analysis on the Java runtime installed with the scanner
+      (sonar.scanner.javaExePath and sonar.scanner.skipJreProvisioning)
+      instead of the one the scanner downloads from SonarQube 10.6 and above,
+      or SonarQube Cloud, at the start of every analysis (and caches in
+      ~/.sonar). For a server that can't provide one, or a job that should
+      download less. The server's analyzers must run on that Java release.
+    default: "false"
+  task_id_env_var:
+    description: >
+      Environment variable to export the ID of the server's task that
+      processes the analysis to, for later steps.
+    default: SONAR_CE_TASK_ID
+  token:
+    description: >
+      Name of the environment variable that holds the SonarQube token the
+      scanner authenticates with: a project analysis token, or a global
+      analysis or user token. It must not be empty.
+    default: SONAR_TOKEN
+  verbose:
+    description: >
+      Debug output from the scanner (-X): every property it uses, the files it
+      indexes and the requests it makes.
+    default: "false"
+  working_dir:
+    description: >
+      Directory to run in: the project's base directory, which holds its
+      sonar-project.properties.
+    default: .
+
+runs:
+  using: composite
+  steps:
+    - name: SonarQube analysis
+      shell: bash
+      working-directory: ${{ inputs.working_dir }}
+      env:
+        PARAM_DASHBOARD_URL_ENV_VAR: ${{ inputs.dashboard_url_env_var }}
+        PARAM_EXTRA_ARGS: ${{ inputs.extra_args }}
+        PARAM_HOST_URL: ${{ inputs.host_url }}
+        PARAM_JAVA_OPTS: ${{ inputs.java_opts }}
+        PARAM_PROPERTIES: ${{ inputs.properties }}
+        PARAM_QUALITY_GATE_TIMEOUT: ${{ inputs.quality_gate_timeout }}
+        PARAM_QUALITY_GATE_WAIT: ${{ inputs.quality_gate_wait }}
+        PARAM_SKIP_JRE_PROVISIONING: ${{ inputs.skip_jre_provisioning }}
+        PARAM_TASK_ID_ENV_VAR: ${{ inputs.task_id_env_var }}
+        PARAM_TOKEN: ${{ inputs.token }}
+        PARAM_VERBOSE: ${{ inputs.verbose }}
+      run: >-
+        bash "${GITHUB_ACTION_PATH}/../run_script.sh" "${GITHUB_ACTION_PATH}/../../src/scripts/scan.sh"
+        "SCRIPT_SONARQUBE_LIB=${GITHUB_ACTION_PATH}/../../src/scripts/lib/sonarqube.sh"

@@ -1,0 +1,112 @@
+description: >
+  Prepares a SonarQube analysis: checks the project's
+  sonar-project.properties (that it exists, has a valid sonar.projectKey,
+  holds no credentials, and that the sonar.sources and sonar.tests it names
+  exist) and the checkout (not shallow), and works out from CircleCI's or
+  GitHub Actions' environment whether this build analyzes a branch or a pull
+  request. It prints the file's settings with credentials hidden and exports
+  the branch or pull request properties for scan, which passes them to the
+  scanner with -D: the properties file is never changed. Branch and pull
+  request analysis need SonarQube Server Developer Edition or above, or
+  SonarQube Cloud; with branch_analysis auto, setup asks the server and
+  leaves them out for Community Build.
+parameters:
+  working_dir:
+    type: string
+    default: "."
+    description: >
+      Directory to run in: the project's base directory, which holds its
+      sonar-project.properties. Run scan in the same one.
+  properties_file:
+    type: string
+    default: sonar-project.properties
+    description: >
+      The project's properties file, relative to working_dir. Another name
+      than sonar-project.properties is passed to the scanner as
+      project.settings. Environment variables are expanded.
+  require_properties_file:
+    type: boolean
+    default: true
+    description: >
+      Fail when properties_file doesn't exist. Set to false for a project
+      configured by parameters alone, with project_key here and the rest in
+      scan's properties.
+  project_key:
+    type: string
+    default: ""
+    description: >
+      The project's key (sonar.projectKey), in place of the file's. Empty
+      (the default) uses the file's. Environment variables are expanded.
+  host_url:
+    type: string
+    default: ""
+    description: >
+      The server's URL, such as https://sonarqube.example.com, which setup
+      asks for its edition when branch_analysis is auto. Empty (the default)
+      uses SONAR_HOST_URL, then the file's sonar.host.url, as the scanner
+      does. Give scan the same value. Environment variables are expanded.
+  token:
+    type: env_var_name
+    default: SONAR_TOKEN
+    description: >
+      Name of the environment variable that holds a SonarQube token, which
+      setup uses to ask the server for its edition. It only goes over https,
+      or to localhost.
+  branch_analysis:
+    type: enum
+    enum: ["auto", "true", "false"]
+    default: auto
+    description: >
+      Whether the analysis names this build's branch (sonar.branch.name) or
+      pull request (sonar.pullrequest.key, .branch and .base). "true" always
+      does, which Community Build refuses. "false" never does, but SonarQube
+      Server Developer Edition and above can still detect a branch or pull
+      request on its own on some CI services, such as GitHub Actions. "auto"
+      (the default) does for SonarQube Cloud and for SonarQube Server
+      Developer Edition and above, and not for Community Build, asking the
+      server which edition it is.
+  branch_name:
+    type: string
+    default: ""
+    description: >
+      The branch to analyze as (sonar.branch.name), in place of the one
+      CircleCI or GitHub Actions names. Setting it analyzes a branch, never a
+      pull request. Environment variables are expanded.
+  pull_request_key:
+    type: string
+    default: ""
+    description: >
+      The pull request's number (sonar.pullrequest.key), in place of the one
+      CircleCI (from CIRCLE_PULL_REQUEST) or GitHub Actions names. Environment
+      variables are expanded.
+  pull_request_branch:
+    type: string
+    default: ""
+    description: >
+      The pull request's branch (sonar.pullrequest.branch), in place of
+      CIRCLE_BRANCH or GITHUB_HEAD_REF. Environment variables are expanded.
+  pull_request_base:
+    type: string
+    default: ""
+    description: >
+      The branch the pull request goes into (sonar.pullrequest.base). Empty
+      (the default) uses GITHUB_BASE_REF on GitHub Actions; on CircleCI,
+      which doesn't say, it leaves it out, and SonarQube then uses the
+      project's main branch. Environment variables are expanded.
+steps:
+  - run:
+      name: Set up the SonarQube analysis
+      working_directory: << parameters.working_dir >>
+      environment:
+        PARAM_BRANCH_ANALYSIS: << parameters.branch_analysis >>
+        PARAM_BRANCH_NAME: << parameters.branch_name >>
+        PARAM_HOST_URL: << parameters.host_url >>
+        PARAM_PROJECT_KEY: << parameters.project_key >>
+        PARAM_PROPERTIES_FILE: << parameters.properties_file >>
+        PARAM_PULL_REQUEST_BASE: << parameters.pull_request_base >>
+        PARAM_PULL_REQUEST_BRANCH: << parameters.pull_request_branch >>
+        PARAM_PULL_REQUEST_KEY: << parameters.pull_request_key >>
+        PARAM_REQUIRE_PROPERTIES_FILE: << parameters.require_properties_file >>
+        PARAM_TOKEN: << parameters.token >>
+        SCRIPT_SONARQUBE_LIB: << include(scripts/lib/sonarqube.sh) >>
+      command: << include(scripts/setup.sh) >>

@@ -1,0 +1,30 @@
+description: >
+  Analyze with SonarQube Cloud. Without a server URL, the scanner sends the
+  analysis to SonarQube Cloud (https://sonarcloud.io), which needs the
+  organization's key: in sonar-project.properties, or as here, in scan's
+  properties. A project in the US region uses https://sonarqube.us as
+  host_url.
+
+usage:
+  version: 2.1
+  orbs:
+    sonarqube: juburr/sonarqube-orb@0.1.0
+  jobs:
+    sonarqube:
+      docker:
+        - image: cimg/base:current
+      steps:
+        - checkout
+        - sonarqube/install
+        - sonarqube/setup:
+            host_url: https://sonarcloud.io
+        - sonarqube/scan:
+            host_url: https://sonarcloud.io
+            properties: |
+              sonar.organization=acme
+            quality_gate_wait: true
+  workflows:
+    analyze:
+      jobs:
+        - sonarqube:
+            context: sonarcloud

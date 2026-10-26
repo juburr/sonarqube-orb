@@ -1,0 +1,113 @@
+description: >
+  Writes the unresolved issues of the analysis scan sent to a SARIF 2.1.0
+  file, which GitHub code scanning (upload_sarif) and other tools can read.
+  SonarQube has no SARIF export, so this reads the analysis from the Web
+  API: it waits for the server to process it, then reads the analyzed
+  branch's or pull request's issues and their rules' names. Each result is
+  placed in the file the issue is in, relative to the repository's root,
+  with a level from the issue's severity, and a security-severity for
+  security issues. Run it after scan, in the same job; it exports the file's
+  path for upload_sarif. Needs jq, curl, and a token with Browse and Execute
+  Analysis permission on the project, such as a user token.
+parameters:
+  working_dir:
+    type: string
+    default: "."
+    description: >
+      Directory to run in: the one scan ran in, the project's base directory.
+      The issues' paths are made relative to the repository it is in.
+  host_url:
+    type: string
+    default: ""
+    description: >
+      The server's URL. Empty (the default) uses SONAR_HOST_URL, then the
+      serverUrl the scanner wrote to its report. Environment variables are
+      expanded.
+  token:
+    type: env_var_name
+    default: SONAR_TOKEN
+    description: >
+      Name of the environment variable that holds a SonarQube token with
+      Browse and Execute Analysis permission on the project, such as a user
+      token. Project and global analysis tokens can't read issues. It only
+      goes over https, or to localhost.
+  report_task_file:
+    type: string
+    default: ""
+    description: >
+      The report-task.txt the scanner wrote, which names the analysis. Empty
+      (the default) uses the one scan exported (SONARQUBE_ORB_REPORT_TASK),
+      then .scannerwork/report-task.txt. Environment variables are expanded.
+  wait_timeout:
+    type: string
+    default: "300"
+    description: >
+      How many seconds to wait for the server to process the analysis.
+  category:
+    type: string
+    default: sonarqube
+    description: >
+      The category of the analysis in GitHub code scanning
+      (runAutomationDetails), followed by the project's key, so this
+      project's alerts replace only its own.
+  max_issues_truncate:
+    type: boolean
+    default: false
+    description: >
+      Write the first 10,000 issues when there are more, the most SonarQube
+      returns, instead of failing.
+  output_dir:
+    type: string
+    default: /tmp/sonarqube-reports
+    description: >
+      Absolute path of the directory to write the SARIF file into.
+      Environment variables are not expanded, since the path is also passed
+      to store_artifacts.
+  report_name:
+    type: string
+    default: sonarqube
+    description: >
+      The SARIF file's name, without extension: <report_name>.sarif.
+  sarif_file_env_var:
+    type: env_var_name
+    default: SONAR_SARIF_FILE
+    description: >
+      Environment variable to export the SARIF file's path to, which
+      upload_sarif reads.
+  when:
+    type: enum
+    enum: ["on_success", "always", "on_fail"]
+    default: on_success
+    description: >
+      When the step runs: "always" also runs it after an earlier step
+      failed, such as a scan whose quality gate failed. On GitHub Actions,
+      give the step if: always() instead.
+  store_artifacts:
+    type: boolean
+    default: true
+    description: >
+      Store output_dir as job artifacts under sonarqube-reports/.
+steps:
+  - run:
+      name: Export SonarQube issues as SARIF
+      working_directory: << parameters.working_dir >>
+      environment:
+        PARAM_CATEGORY: << parameters.category >>
+        PARAM_HOST_URL: << parameters.host_url >>
+        PARAM_MAX_ISSUES_TRUNCATE: << parameters.max_issues_truncate >>
+        PARAM_OUTPUT_DIR: << parameters.output_dir >>
+        PARAM_REPORT_NAME: << parameters.report_name >>
+        PARAM_REPORT_TASK_FILE: << parameters.report_task_file >>
+        PARAM_SARIF_FILE_ENV_VAR: << parameters.sarif_file_env_var >>
+        PARAM_TOKEN: << parameters.token >>
+        PARAM_WAIT_TIMEOUT: << parameters.wait_timeout >>
+        SCRIPT_SONARQUBE_LIB: << include(scripts/lib/sonarqube.sh) >>
+      command: << include(scripts/export_sarif.sh) >>
+      when: << parameters.when >>
+  - when:
+      condition: << parameters.store_artifacts >>
+      steps:
+        - store_artifacts:
+            path: << parameters.output_dir >>
+            destination: sonarqube-reports
+            when: always
