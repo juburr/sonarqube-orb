@@ -199,6 +199,9 @@ jobs:
             [[ -f "${SONARQUBE_ORB_REPORT_TASK}" ]]
             curl -sS --fail -H "Authorization: Bearer ${SONAR_TOKEN}" \
               "http://localhost:9000/api/ce/task?id=${SONAR_CE_TASK_ID}" | jq -e '.task.status == "SUCCESS"'
+            grep -qx "ceTaskId=${SONAR_CE_TASK_ID}" tests/fixtures/project/.scannerwork/sonarqube-orb.properties
+            base=$(sed -n 's/^projectBaseDir=//p' tests/fixtures/project/.scannerwork/sonarqube-orb.properties)
+            [[ "$(readlink -f "${base}")" == "$(readlink -f tests/fixtures/project)" ]]
       - sonarqube-orb/export_sarif:
           working_dir: *project
           when: always
@@ -259,6 +262,7 @@ jobs:
           working_dir: *project
           skip_jre_provisioning: true
           verbose: true
+          quality_gate_wait: true
           properties: |
             sonar.projectName=sonarqube-orb fixture, scanner's Java
       - run:
@@ -266,6 +270,9 @@ jobs:
           command: |
             curl -sS --fail -H "Authorization: Bearer ${SONAR_TOKEN}" \
               "http://localhost:9000/api/ce/task?id=${SONAR_CE_TASK_ID}" | jq -e '.task.status == "SUCCESS"'
+            grep -qx "ceTaskId=${SONAR_CE_TASK_ID}" tests/fixtures/project/.scannerwork/sonarqube-orb.properties
+            base=$(sed -n 's/^projectBaseDir=//p' tests/fixtures/project/.scannerwork/sonarqube-orb.properties)
+            [[ "$(readlink -f "${base}")" == "$(readlink -f tests/fixtures/project)" ]]
 
 workflows:
   test-deploy:

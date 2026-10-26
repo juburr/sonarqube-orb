@@ -118,8 +118,11 @@ if [[ -z "${SQ_TOKEN}" ]]; then
 fi
 
 # A report from an earlier analysis must not pass for this one's.
+# SCAN_FILE records, for export_sarif, the base directory the scanner
+# analyzed, which the properties file, properties and extra_args can all set.
+SCAN_FILE="${REPORT_TASK%/*}/sonarqube-orb.properties"
 mkdir -p "${REPORT_TASK%/*}"
-rm -f "${REPORT_TASK}"
+rm -f "${REPORT_TASK}" "${SCAN_FILE}"
 
 echo "Running $("${SCANNER}" --version 2> /dev/null | sed -n 's/.*\(SonarScanner CLI [0-9.]*\).*/\1/p' | head -n 1 || true) in $(pwd)"
 for arg in "${ARGS[@]}"; do
@@ -152,6 +155,11 @@ if [[ -s "${REPORT_TASK}" ]]; then
     sq_export SONARQUBE_ORB_REPORT_TASK "${REPORT_TASK}"
     sq_export "${PARAM_DASHBOARD_URL_ENV_VAR}" "${DASHBOARD}"
     sq_export "${PARAM_TASK_ID_ENV_VAR}" "${TASK_ID}"
+    # The scanner logs the base directory as "INFO  Base dir: /path".
+    BASE_DIR=$(awk 'match($0, /INFO:?[ \t]+Base dir: \//) { print substr($0, RSTART + RLENGTH - 1); exit }' "${WORK}/scan.log")
+    if [[ -n "${TASK_ID}" && -d "${BASE_DIR}" ]]; then
+        printf 'ceTaskId=%s\nprojectBaseDir=%s\n' "${TASK_ID}" "${BASE_DIR}" > "${SCAN_FILE}"
+    fi
 fi
 
 if [[ "${RC}" -ne 0 ]]; then

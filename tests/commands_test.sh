@@ -122,11 +122,12 @@ printf '%s\n' "$@" > "${CALLS}/sonar-scanner.args"
     printf 'SONAR_SCANNER_OPTS=%s\n' "${SONAR_SCANNER_OPTS-<unset>}"
     printf 'SONAR_SCANNER_JAVA_OPTS=%s\n' "${SONAR_SCANNER_JAVA_OPTS-<unset>}"
 } > "${CALLS}/sonar-scanner.env"
-metadata="" key=""
+metadata="" key="" base=$(pwd)
 for arg in "$@"; do
     case "${arg}" in
         -Dsonar.scanner.metadataFilePath=*) metadata=${arg#*=} ;;
         -Dsonar.projectKey=*) key=${arg#*=} ;;
+        -Dsonar.projectBaseDir=*) base=$(cd "${arg#*=}" && pwd) ;;
     esac
 done
 key=${key:-$(sed -n 's/^sonar.projectKey=//p' sonar-project.properties 2> /dev/null)}
@@ -135,6 +136,7 @@ report() {
         "${key}" "${STUB_SERVER:-http://127.0.0.1:9}" "${STUB_SERVER:-http://127.0.0.1:9}" "${key}" "${STUB_SERVER:-http://127.0.0.1:9}" > "${metadata}"
 }
 echo "INFO Analysis of ${key}"
+echo "21:04:31.078 INFO  Base dir: ${base}"
 case "${STUB_SCAN:-ok}" in
     ok) report; echo "INFO EXECUTION SUCCESS"; exit 0 ;;
     gate) report; echo "INFO QUALITY GATE STATUS: FAILED - View details on http://sonar/dashboard"; echo "ERROR EXECUTION FAILURE"; exit 3 ;;
@@ -464,6 +466,12 @@ check "Java options are left alone" file_has "${CALLS}/sonar-scanner.env" "SONAR
 check "exports the dashboard URL" exported SONAR_DASHBOARD_URL "${SERVER}/dashboard?id=demo"
 check "the task ID" exported SONAR_CE_TASK_ID AZtask1
 check "and the report's path" exported SONARQUBE_ORB_REPORT_TASK "${CASE}/repo/app/.scannerwork/report-task.txt"
+check "records the base directory the scanner logged" file_has "${CASE}/repo/app/.scannerwork/sonarqube-orb.properties" "projectBaseDir=${CASE}/repo/app"
+check "for the task it sent" file_has "${CASE}/repo/app/.scannerwork/sonarqube-orb.properties" "ceTaskId=AZtask1"
+new_case
+mkdir -p "${CASE}/repo/app/sub"
+run scan SONAR_TOKEN=squ_abc properties=sonar.projectBaseDir=sub
+check "a base directory set in properties is the one recorded" file_has "${CASE}/repo/app/.scannerwork/sonarqube-orb.properties" "projectBaseDir=${CASE}/repo/app/sub"
 new_case
 printf 'export SONARQUBE_ORB_PROPERTIES=%q\n' $'sonar.pullrequest.key=42\nsonar.pullrequest.branch=feature/login' > "${CASE}/setup_env"
 run scan SONAR_TOKEN=squ_abc "host_url=${SERVER}/" verbose=true quality_gate_wait=true quality_gate_timeout=120 \
@@ -535,9 +543,11 @@ check "pointing at branch_analysis" said "Set setup's branch_analysis to auto or
 new_case
 mkdir -p "${CASE}/repo/app/.scannerwork"
 printf 'ceTaskId=OLD\ndashboardUrl=old\n' > "${CASE}/repo/app/.scannerwork/report-task.txt"
+printf 'ceTaskId=OLD\nprojectBaseDir=/\n' > "${CASE}/repo/app/.scannerwork/sonarqube-orb.properties"
 run scan SONAR_TOKEN=squ_abc STUB_SCAN=noreport
 check "a scanner that writes no report fails" failed
 check "an earlier report is not taken for this one" not_exported SONAR_CE_TASK_ID
+check "nor its base directory" absent "${CASE}/repo/app/.scannerwork/sonarqube-orb.properties"
 new_case
 run scan SONAR_TOKEN=squ_abc STUB_SCAN=error
 check "a scanner that fails fails" failed
@@ -614,6 +624,21 @@ routes "[$(task_route "${TASK_DONE}"),
 run export_sarif SONAR_TOKEN=squ_abc
 check "paths are relative to sonar.projectBaseDir, and percent-encoded" \
     json_is "${CASE}/out/sonarqube.sarif" '.runs[0].results[0].locations[0].physicalLocation.artifactLocation.uri' "app/sub/src/my%20file%231.py"
+new_case
+report_task demo
+mkdir -p "${CASE}/repo/app/other"
+printf 'ceTaskId=AZtask1\nprojectBaseDir=%s\n' "${CASE}/repo/app/other" > "${CASE}/repo/app/.scannerwork/sonarqube-orb.properties"
+routes "[$(task_route "${TASK_DONE}"),
+    {\"path\": \"/api/issues/search\", \"responses\": [{\"json\": {\"paging\": {\"total\": 1}, \"issues\": [{\"key\": \"A\", \"rule\": \"r:1\", \"component\": \"demo:src/a.py\", \"message\": \"m\", \"severity\": \"MINOR\"}]}}]}]"
+run export_sarif SONAR_TOKEN=squ_abc
+check "the base directory scan recorded comes first" \
+    json_is "${CASE}/out/sonarqube.sarif" '.runs[0].results[0].locations[0].physicalLocation.artifactLocation.uri' "app/other/src/a.py"
+printf 'ceTaskId=OLD\nprojectBaseDir=%s\n' "${CASE}/repo/app/other" > "${CASE}/repo/app/.scannerwork/sonarqube-orb.properties"
+routes "[$(task_route "${TASK_DONE}"),
+    {\"path\": \"/api/issues/search\", \"responses\": [{\"json\": {\"paging\": {\"total\": 1}, \"issues\": [{\"key\": \"A\", \"rule\": \"r:1\", \"component\": \"demo:src/a.py\", \"message\": \"m\", \"severity\": \"MINOR\"}]}}]}]"
+run export_sarif SONAR_TOKEN=squ_abc
+check "unless it is another task's" \
+    json_is "${CASE}/out/sonarqube.sarif" '.runs[0].results[0].locations[0].physicalLocation.artifactLocation.uri' "app/src/a.py"
 
 begin "the analyzed branch or pull request"
 new_case

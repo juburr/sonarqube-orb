@@ -195,7 +195,7 @@ workflows:
               only: main
 ```
 
-`branch_analysis: true` always sends them, and `false` never does.
+`branch_analysis: true` always sends them, and `false` never does. SonarQube Server Developer Edition and above can still detect a branch or pull request on its own on some CI services, such as GitHub Actions, whatever `setup` sends.
 
 ### SonarQube Cloud
 
@@ -270,7 +270,7 @@ Any release in the [checksum table](#-checksum-verification) installs verified, 
     working_dir: services/api
 ```
 
-Paths in the SARIF file are made relative to the repository's root.
+Paths in the SARIF file are made relative to the repository's root, from the base directory the scanner analyzed, whether `sonar-project.properties`, `properties` or `extra_args` set its `sonar.projectBaseDir`.
 
 ### Run the Analysis on the Scanner's Own Java
 

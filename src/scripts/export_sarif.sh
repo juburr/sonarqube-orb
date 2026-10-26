@@ -197,14 +197,22 @@ if [[ "${TOTAL}" -ge 10000 ]]; then
     fi
 fi
 
-# Paths in SonarQube are relative to the project's base directory: this
-# one, or the sonar.projectBaseDir of its properties file (the one setup
-# named as project.settings, or sonar-project.properties). SARIF's are
-# relative to the repository's root.
+# Paths in SonarQube are relative to the project's base directory, SARIF's
+# to the repository's root. The base directory is the one the scanner
+# logged, which scan records beside its report for the same task; else the
+# sonar.projectBaseDir of the properties file (the one setup named as
+# project.settings, or sonar-project.properties); else this one.
 BASE_DIR="."
+SCAN_FILE="$(dirname "${REPORT_TASK}")/sonarqube-orb.properties"
+SCAN_BASE_DIR=""
+if [[ -f "${SCAN_FILE}" ]] && [[ "$(sed -n 's/^ceTaskId=//p' "${SCAN_FILE}")" == "${TASK_ID}" ]]; then
+    SCAN_BASE_DIR=$(sed -n 's/^projectBaseDir=//p' "${SCAN_FILE}")
+fi
 PROPERTIES_FILE=$(sed -n 's/^project\.settings=//p' <<< "${SONARQUBE_ORB_PROPERTIES:-}" | head -n 1)
 PROPERTIES_FILE=${PROPERTIES_FILE:-sonar-project.properties}
-if [[ -f "${PROPERTIES_FILE}" ]]; then
+if [[ -n "${SCAN_BASE_DIR}" && -d "${SCAN_BASE_DIR}" ]]; then
+    BASE_DIR=${SCAN_BASE_DIR}
+elif [[ -f "${PROPERTIES_FILE}" ]]; then
     SQ_PROPS=()
     sq_properties_read "${PROPERTIES_FILE}"
     if [[ -n "${SQ_PROPS[sonar.projectBaseDir]:-}" && -d "${SQ_PROPS[sonar.projectBaseDir]}" ]]; then

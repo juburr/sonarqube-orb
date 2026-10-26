@@ -18,11 +18,12 @@ inputs:
     description: >
       Whether the analysis names this build's branch (sonar.branch.name) or
       pull request (sonar.pullrequest.key, .branch and .base). "true" always
-      does, which Community Build refuses. "false" never does, so every
-      analysis goes to the project's main branch. "auto" (the default) does
-      for SonarQube Cloud and for SonarQube Server Developer Edition and
-      above, and not for Community Build, asking the server which edition it
-      is.
+      does, which Community Build refuses. "false" never does, but SonarQube
+      Server Developer Edition and above can still detect a branch or pull
+      request on its own on some CI services, such as GitHub Actions. "auto"
+      (the default) does for SonarQube Cloud and for SonarQube Server
+      Developer Edition and above, and not for Community Build, asking the
+      server which edition it is.
     default: auto
   branch_name:
     description: >

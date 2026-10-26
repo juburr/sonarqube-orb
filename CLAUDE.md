@@ -87,6 +87,8 @@ The table covers 7.0.0 to 8.2.0.
   - Without an edition, `api/server/version` separates Community Build (major 24 to 99) from SonarQube Server (2025.x and on, or 10.x and before), as the scanner itself does. It needs no token, so it is asked without one, over http too. `sq_api` allows http when it sends no token.
   - An unknown edition gets them, with a warning.
 
+  `branch_analysis false` only leaves them out. SonarQube Server Developer Edition and above detect a branch or pull request on GitHub Actions by themselves, and no scanner setting reliably stops that: `sonar.ci.autoconfig.disabled` only empties the scanner's CI configuration (its revision and DevOps platform). So the descriptions don't promise a main-branch analysis.
+
   The properties file is never changed.
 - **`scan.sh`** builds the scanner's arguments in this order (a later `-D` wins):
   1. `host_url`;
@@ -99,7 +101,7 @@ The table covers 7.0.0 to 8.2.0.
 
   `sonar.token`, `sonar.login`, `sonar.password` and `sonar.scanner.metadataFilePath` are refused in `properties` and `extra_args`. The token and `java_opts` (as `SONAR_SCANNER_OPTS` and `SONAR_SCANNER_JAVA_OPTS`) are exported in a subshell that `exec`s the scanner, never on a command line, not even `env`'s.
 
-  After the scanner runs, the report is exported even when the scan fails. The log tells apart a failed gate (`QUALITY GATE STATUS: FAILED`), the gate's timeout (`Quality Gate check timeout exceeded`) and Community Build refusing a branch (`Developer Edition or above is required`). The scanner exits 3 for engine failures, 1 for bootstrap failures and 2 for user errors.
+  After the scanner runs, the report is exported even when the scan fails. The base directory the scanner logged (`INFO  Base dir: /path`), which the properties file, `properties`, `extra_args` and `project.settings` can all set, goes with the task ID into `sonarqube-orb.properties` beside the report, for `export_sarif`. The log tells apart a failed gate (`QUALITY GATE STATUS: FAILED`), the gate's timeout (`Quality Gate check timeout exceeded`) and Community Build refusing a branch (`Developer Edition or above is required`). The scanner exits 3 for engine failures, 1 for bootstrap failures and 2 for user errors.
 - **`export_sarif.sh`** reads `report-task.txt` (raw `key=value` lines; split at the first `=`). It builds API URLs from `host_url`, else `SONAR_HOST_URL`, else the report's `serverUrl`, which is the server's own idea of its URL. It then:
   1. polls `api/ce/task?id=` until SUCCESS. That needs Execute Analysis or Administer, not just Browse, so analysis tokens fail there.
   2. takes `componentKey`, `branch` and `pullRequest` from the task (absent for the main branch);
@@ -108,7 +110,7 @@ The table covers 7.0.0 to 8.2.0.
   jq turns the issues into one SARIF run:
   - **Level** is the highest of the issue's `impacts` severities, else its legacy `severity`. Both are always returned, whatever the server's mode.
   - **Region:** `textRange` lines are 1-based and offsets 0-based, so `startColumn = startOffset + 1`.
-  - **Paths:** URIs are prefixed with `git rev-parse --show-prefix` of the project's base directory: the `sonar.projectBaseDir` of its properties file (setup's `project.settings`, or `sonar-project.properties`), else `working_dir`. Each path segment is percent-encoded.
+  - **Paths:** URIs are prefixed with `git rev-parse --show-prefix` of the project's base directory: the one `scan` recorded beside the report, when its task ID is the report's; else the `sonar.projectBaseDir` of its properties file (setup's `project.settings`, or `sonar-project.properties`); else `working_dir`. Each path segment is percent-encoded.
   - **Fingerprint:** GitHub matches alerts only by `partialFingerprints.primaryLocationLineHash`, and doesn't compute it for API uploads. It is `<rule>:<issue hash or key>:<n>`, so it is stable between analyses and between a branch and its pull requests.
   - **`security-severity`** is a string, set on rules with security issues. Those rules also get the `security` tag, without which GitHub ignores it.
   - **`automationDetails.id`** is `<category>/<project>/`.
