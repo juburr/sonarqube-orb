@@ -101,7 +101,7 @@ Add `SONAR_HOST_URL` and `SONAR_TOKEN` (a token from SonarQube, under **My Accou
 version: 2.1
 
 orbs:
-  sonarqube: juburr/sonarqube-orb@0.1.0
+  sonarqube: juburr/sonarqube-orb@0.1.1
 
 jobs:
   sonarqube:
@@ -142,9 +142,9 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0  # SonarQube needs the history for blame and new code
-      - uses: juburr/sonarqube-orb/actions/install@v0.1.0
-      - uses: juburr/sonarqube-orb/actions/setup@v0.1.0
-      - uses: juburr/sonarqube-orb/actions/scan@v0.1.0
+      - uses: juburr/sonarqube-orb/actions/install@v0.1.1
+      - uses: juburr/sonarqube-orb/actions/setup@v0.1.1
+      - uses: juburr/sonarqube-orb/actions/scan@v0.1.1
         with:
           quality_gate_wait: "true"
 ```
@@ -372,11 +372,11 @@ Every command has a composite action of the same name, with the same inputs and 
 
 | Action | Command |
 |---|---|
-| `juburr/sonarqube-orb/actions/install@v0.1.0` | `install` |
-| `juburr/sonarqube-orb/actions/setup@v0.1.0` | `setup` |
-| `juburr/sonarqube-orb/actions/scan@v0.1.0` | `scan` |
-| `juburr/sonarqube-orb/actions/export_sarif@v0.1.0` | `export_sarif` |
-| `juburr/sonarqube-orb/actions/upload_sarif@v0.1.0` | `upload_sarif` |
+| `juburr/sonarqube-orb/actions/install@v0.1.1` | `install` |
+| `juburr/sonarqube-orb/actions/setup@v0.1.1` | `setup` |
+| `juburr/sonarqube-orb/actions/scan@v0.1.1` | `scan` |
+| `juburr/sonarqube-orb/actions/export_sarif@v0.1.1` | `export_sarif` |
+| `juburr/sonarqube-orb/actions/upload_sarif@v0.1.1` | `upload_sarif` |
 
 What one action exports, later steps see, as with CircleCI's `BASH_ENV`. A few differences:
 
@@ -394,9 +394,9 @@ What one action exports, later steps see, as with CircleCI's `BASH_ENV`. A few d
       security-events: write
     steps:
       # ... install, setup, scan
-      - uses: juburr/sonarqube-orb/actions/export_sarif@v0.1.0
+      - uses: juburr/sonarqube-orb/actions/export_sarif@v0.1.1
         if: always()
-      - uses: juburr/sonarqube-orb/actions/upload_sarif@v0.1.0
+      - uses: juburr/sonarqube-orb/actions/upload_sarif@v0.1.1
         if: always()
         env:
           GITHUB_TOKEN: ${{ github.token }}
