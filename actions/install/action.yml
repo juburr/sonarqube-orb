@@ -22,7 +22,9 @@ inputs:
       with SonarSource's paths (/Distribution/sonar-scanner-cli/...), then
       Maven's (/org/sonarsource/scanner/cli/...). The checksum table, not the
       mirror, decides what is installed. It must not hold credentials, a query
-      or a fragment.
+      or a fragment. A mirror that needs a login gets it from the entry for
+      its host in the .netrc file (NETRC, or ~/.netrc), and curl sends it to
+      the mirror alone, never to a host the mirror redirects to.
     default: ""
   install_path:
     description: >

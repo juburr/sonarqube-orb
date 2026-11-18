@@ -7,7 +7,7 @@ description: >
 usage:
   version: 2.1
   orbs:
-    sonarqube: juburr/sonarqube-orb@0.1.1
+    sonarqube: juburr/sonarqube-orb@0.2.0
   jobs:
     sonarqube:
       docker:

@@ -101,7 +101,7 @@ Add `SONAR_HOST_URL` and `SONAR_TOKEN` (a token from SonarQube, under **My Accou
 version: 2.1
 
 orbs:
-  sonarqube: juburr/sonarqube-orb@0.1.1
+  sonarqube: juburr/sonarqube-orb@0.2.0
 
 jobs:
   sonarqube:
@@ -142,9 +142,9 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0  # SonarQube needs the history for blame and new code
-      - uses: juburr/sonarqube-orb/actions/install@v0.1.1
-      - uses: juburr/sonarqube-orb/actions/setup@v0.1.1
-      - uses: juburr/sonarqube-orb/actions/scan@v0.1.1
+      - uses: juburr/sonarqube-orb/actions/install@v0.2.0
+      - uses: juburr/sonarqube-orb/actions/setup@v0.2.0
+      - uses: juburr/sonarqube-orb/actions/scan@v0.2.0
         with:
           quality_gate_wait: "true"
 ```
@@ -295,7 +295,7 @@ Every parameter that names a value (`version`, `host_url`, `properties` and the 
 | `version` | `8.2.0` | Release to install, such as `7.2.0` or `7.2.0.5079` |
 | `verify_checksums` | `strict` | `strict`, `known_versions` or `false` (see [Checksum Verification](#-checksum-verification)) |
 | `install_path` | `~/.sonarqube-orb/sonar-scanner` | Directory for the whole release; its `bin` goes on the `PATH` |
-| `download_base_url` | | An https mirror of binaries.sonarsource.com or Maven Central |
+| `download_base_url` | | An https mirror of binaries.sonarsource.com or Maven Central. A mirror that needs a login gets the `.netrc` entry for its host; see [Mirrors That Need a Login](#-mirrors-that-need-a-login). |
 | `caching` | `true` | Cache the verified release between jobs |
 
 ### `sonarqube/setup`
@@ -372,11 +372,11 @@ Every command has a composite action of the same name, with the same inputs and 
 
 | Action | Command |
 |---|---|
-| `juburr/sonarqube-orb/actions/install@v0.1.1` | `install` |
-| `juburr/sonarqube-orb/actions/setup@v0.1.1` | `setup` |
-| `juburr/sonarqube-orb/actions/scan@v0.1.1` | `scan` |
-| `juburr/sonarqube-orb/actions/export_sarif@v0.1.1` | `export_sarif` |
-| `juburr/sonarqube-orb/actions/upload_sarif@v0.1.1` | `upload_sarif` |
+| `juburr/sonarqube-orb/actions/install@v0.2.0` | `install` |
+| `juburr/sonarqube-orb/actions/setup@v0.2.0` | `setup` |
+| `juburr/sonarqube-orb/actions/scan@v0.2.0` | `scan` |
+| `juburr/sonarqube-orb/actions/export_sarif@v0.2.0` | `export_sarif` |
+| `juburr/sonarqube-orb/actions/upload_sarif@v0.2.0` | `upload_sarif` |
 
 What one action exports, later steps see, as with CircleCI's `BASH_ENV`. A few differences:
 
@@ -394,9 +394,9 @@ What one action exports, later steps see, as with CircleCI's `BASH_ENV`. A few d
       security-events: write
     steps:
       # ... install, setup, scan
-      - uses: juburr/sonarqube-orb/actions/export_sarif@v0.1.1
+      - uses: juburr/sonarqube-orb/actions/export_sarif@v0.2.0
         if: always()
-      - uses: juburr/sonarqube-orb/actions/upload_sarif@v0.1.1
+      - uses: juburr/sonarqube-orb/actions/upload_sarif@v0.2.0
         if: always()
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -418,6 +418,30 @@ On a `pull_request` event, SonarQube Server Developer Edition and above also det
 - **Executors.** Linux on amd64 or arm64, with bash 4, curl or wget, and unzip (or bsdtar): `cimg/base`, CircleCI's machine images, and GitHub's Ubuntu runners. The scanner's Java runtime needs glibc, so Alpine images aren't supported.
 - **Servers.** SonarQube Server, SonarQube Community Build and SonarQube Cloud, as the scanner release supports them. CI tests every command against Community Build 25.9 and 26.10, with scanner 7.0.0 and 8.2.0.
 - **Extra tools.** `export_sarif` and `upload_sarif` also need jq; `upload_sarif` needs gzip and base64. `cimg/base` and GitHub's runners have all of them.
+
+## 🔑 Mirrors That Need a Login
+
+`download_base_url` points the install at an internal mirror, such as an Artifactory remote repository. When the mirror needs a login, the install takes it from the entry for the mirror's host in the `.netrc` file (`NETRC`, or `~/.netrc`), which an earlier step writes, such as from a context's variables. Artifactory takes an access token as the password.
+
+```yaml
+- run:
+    name: Log In to the Mirror
+    command: |
+      umask 077
+      printf 'machine %s login %s password %s\n' artifactory.example.com "${ARTIFACTORY_USER}" "${ARTIFACTORY_TOKEN}" >> ~/.netrc
+```
+
+`printf` is a shell builtin, so the token never reaches a command line.
+
+How the login is kept to the mirror:
+
+- **One entry, in a private file.** The install copies the first complete entry for the mirror's host, alone, into a file only the job's user can read, and gives that file to curl. curl never reads the rest of your `.netrc`: not a `default` entry, not an entry without a password (curl 7.76.0 to 8.11.1 could send a password on to a host the server redirects to, CVE-2024-11053 and CVE-2025-0167, when the `.netrc` held either), and not a token for another host, such as `github.com`.
+- **Only for the mirror.** curl gets the file only for URLs under the mirror. Downloads from anywhere else get no login.
+- **Never past a redirect.** When the mirror redirects a download to another host, such as the cloud storage an Artifactory keeps its files in, that host gets no login, even when a `~/.curlrc` says `location-trusted`.
+- **curl only.** wget reads every entry in `~/.netrc` and can't be limited to one, so an install that would send a mirror login with wget fails and asks for curl.
+- **Out of the log.** The log names the `.netrc` file and the host, never the login. A `.netrc` other users can read is reported.
+
+An entry the install can't use as curl would, one without a login or password or with a quoted value, is reported, and the mirror is then asked without a login. A mirror that refuses a download without one is reported with the entry it needs.
 
 ## 🔐 Checksum Verification
 
